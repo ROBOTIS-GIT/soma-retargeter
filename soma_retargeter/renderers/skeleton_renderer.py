@@ -117,7 +117,8 @@ class SkeletonRenderer(BaseRenderer):
 
         name = f"/skeleton_{id}"
         self._register_unique_id(name)
-        viewer.log_lines(name, self.line_starts, self.line_ends, skeleton_instance.color)
+        color = skeleton_instance.color
+        viewer.log_lines(name, self.line_starts, self.line_ends, (float(color[0]), float(color[1]), float(color[2])))
 
     def clear(self, viewer):
         """Remove all skeleton lines from the viewer."""

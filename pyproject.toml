@@ -19,6 +19,7 @@ dependencies = [
     "imgui-bundle==1.92.4",
     "usd-core==26.3",
     "scipy==1.17.1",
+    "mujoco==3.6.0",
     "tqdm==4.67.3",
 ]
 
@@ -28,7 +29,7 @@ include = ["soma_retargeter*"]
 exclude = ["app*", "assets*", "submodules*"]
 
 [tool.setuptools.package-data]
-soma_retargeter = ["configs/**/*.json", "configs/**/*.bvh", "configs/**/*.usd"]
+soma_retargeter = ["configs/**/*.json", "configs/**/*.bvh", "configs/**/*.usd", "configs/**/*.xml"]
 
 [tool.setuptools.dynamic]
 version = { attr = "soma_retargeter.__version__" }

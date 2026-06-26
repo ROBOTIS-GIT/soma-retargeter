@@ -4,6 +4,7 @@
 import warp as wp
 
 import newton
+import soma_retargeter.assets.ai_sapiens as ai_sapiens_assets
 import soma_retargeter.utils.newton_utils as newton_utils
 import soma_retargeter.animation.ik as ik_utils
 import soma_retargeter.utils.io_utils as io_utils
@@ -28,10 +29,13 @@ class FeetStabilizer:
         """
         self._load_config(config)
 
-        if self.robot_type == 'unitree_g1':
+        if self.robot_type == 'unitree_g1' or self.robot_type == 'ai_sapiens':
             self.robot_builder = newton.ModelBuilder()
-            self.robot_builder.add_mjcf(
-                newton.utils.download_asset("unitree_g1") / "mjcf/g1_29dof_rev_1_0.xml")
+            if self.robot_type == 'unitree_g1':
+                self.robot_builder.add_mjcf(
+                    newton.utils.download_asset("unitree_g1") / "mjcf/g1_29dof_rev_1_0.xml")
+            else:
+                self.robot_builder.add_mjcf(ai_sapiens_assets.resolve_ai_sapiens_mjcf_path(self.robot_mjcf))
 
             self.num_body_count = self.robot_builder.body_count
             self.ik_model = self._build_model(1)
@@ -175,6 +179,7 @@ class FeetStabilizer:
     def _load_config(self, config: str):
         data = io_utils.load_json(config)
         self.robot_type = data['robot_type']
+        self.robot_mjcf = data.get('robot_mjcf')
         self.ik_iterations = data['ik_iterations']
         self.joint_limit_weight = data['joint_limit_weight']
 

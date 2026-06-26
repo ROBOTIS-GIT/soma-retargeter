@@ -14,3 +14,12 @@ wheels/
 
 # Log files, settings
 imgui.ini
+
+# Generated retargeting outputs
+assets/motions/test-export/
+assets/motions/test-export_*/
+assets/motions/ai_sapiens-csv/
+assets/motions/g1_ai_sapiens_compare*/
+
+# Large robot mesh assets are provided separately.
+assets/robot_assets/ai_sapiens/meshes/*.stl
