@@ -39,7 +39,15 @@ conda activate soma-retargeter
 git lfs pull
 ```
 
-#### 3. Install the Library
+#### 3. Initialize Submodules
+
+AI Sapiens support uses the `ROBOTIS-GIT/ai_sapiens` submodule for robot URDF and STL mesh assets.
+
+```bash
+git submodule update --init --recursive
+```
+
+#### 4. Install the Library
 
 ```bash
 pip install .
@@ -57,7 +65,15 @@ Follow the [official installation guide](https://docs.astral.sh/uv/getting-start
 git lfs pull
 ```
 
-#### 3. Sync the Project
+#### 3. Initialize Submodules
+
+AI Sapiens support uses the `ROBOTIS-GIT/ai_sapiens` submodule for robot URDF and STL mesh assets.
+
+```bash
+git submodule update --init --recursive
+```
+
+#### 4. Sync the Project
 
 `uv sync` creates an isolated `.venv` virtual environment inside the project directory, installs the correct Python version and resolves all dependencies.
 

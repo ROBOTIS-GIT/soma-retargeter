@@ -1,0 +1,20 @@
+{
+  "import_folder": "assets/motions/bvh",
+  "export_folder": "assets/motions/ai_sapiens-csv",
+  "timestamp_result_folder": false,
+  "batch_size": 1,
+  "retargeter": "Newton",
+  "retarget_source": "soma",
+  "retarget_target": "ai_sapiens",
+  "retarget_source_facing_direction": "Mujoco",
+  "retargeter_config": "ai_sapiens/soma_to_ai_sapiens_retargeter_config.json",
+  "ai_sapiens_mjcf": "ai_sapiens/ai_sapiens_retarget.xml",
+  "ai_sapiens_viewer_default_orientation_yaw_deg": -90.0,
+  "ai_sapiens_root_translation_yaw_deg": 0.0,
+  "ai_sapiens_root_orientation_yaw_deg": 0.0,
+  "ai_sapiens_root_translation_xy_scale": 1.0,
+  "ai_sapiens_target_position_yaw_deg": 0.0,
+  "ai_sapiens_target_orientation_yaw_deg": 0.0,
+  "ai_sapiens_target_yaw_pivot": "origin",
+  "ai_sapiens_ground_align": false
+}
