@@ -187,6 +187,115 @@ def _quat_from_rpy(rpy: tuple[float, float, float]) -> tuple[float, float, float
     )
 
 
+def _quat_multiply(
+    lhs: tuple[float, float, float, float],
+    rhs: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """Multiply two wxyz quaternions."""
+    w1, x1, y1, z1 = lhs
+    w2, x2, y2, z2 = rhs
+    return (
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    )
+
+
+def _quat_rotate(
+    quat: tuple[float, float, float, float],
+    vec: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Rotate a vector by a wxyz quaternion."""
+    w, x, y, z = quat
+    vx, vy, vz = vec
+    tx = 2.0 * (y * vz - z * vy)
+    ty = 2.0 * (z * vx - x * vz)
+    tz = 2.0 * (x * vy - y * vx)
+    return (
+        vx + w * tx + (y * tz - z * ty),
+        vy + w * ty + (z * tx - x * tz),
+        vz + w * tz + (x * ty - y * tx),
+    )
+
+
+def _compose_pos_quat(
+    parent_pos: tuple[float, float, float],
+    parent_quat: tuple[float, float, float, float],
+    local_pos: tuple[float, float, float],
+    local_quat: tuple[float, float, float, float],
+) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+    """Compose parent and local poses: T = parent * local."""
+    rotated = _quat_rotate(parent_quat, local_pos)
+    pos = (
+        parent_pos[0] + rotated[0],
+        parent_pos[1] + rotated[1],
+        parent_pos[2] + rotated[2],
+    )
+    quat = _quat_multiply(parent_quat, local_quat)
+    return pos, quat
+
+
+def _collect_fixed_joint_origins(root: ET.Element) -> dict[str, dict[str, Any]]:
+    """Map fixed-joint child links to parent link and joint origin pose."""
+    fixed_origins: dict[str, dict[str, Any]] = {}
+    for joint in root.findall("joint"):
+        if joint.get("type") != "fixed":
+            continue
+        parent = joint.find("parent")
+        child = joint.find("child")
+        parent_link = parent.get("link") if parent is not None else None
+        child_link = child.get("link") if child is not None else None
+        if not parent_link or not child_link:
+            continue
+
+        origin = joint.find("origin")
+        pos = _parse_float_list(origin.get("xyz") if origin is not None else None, (0.0, 0.0, 0.0))
+        rpy = _parse_float_list(origin.get("rpy") if origin is not None else None, (0.0, 0.0, 0.0))
+        fixed_origins[child_link] = {
+            "parent": parent_link,
+            "pos": pos,
+            "quat": _quat_from_rpy(rpy),
+        }
+    return fixed_origins
+
+
+def _resolve_fused_body_placement(
+    body_name: str,
+    mjcf_root: ET.Element,
+    fixed_origins: dict[str, dict[str, Any]],
+) -> tuple[ET.Element, tuple[float, float, float], tuple[float, float, float, float]] | None:
+    """Resolve a fused fixed-joint link onto an existing MJCF body.
+
+    MuJoCo's URDF compiler folds fixed-joint children into their parents. Walk the
+    fixed-joint chain, composing origins, until a surviving body is found.
+    """
+    composed_pos = (0.0, 0.0, 0.0)
+    composed_quat = (1.0, 0.0, 0.0, 0.0)
+    current = body_name
+    visited: set[str] = set()
+
+    while current not in visited:
+        visited.add(current)
+        mapping = fixed_origins.get(current)
+        if mapping is None:
+            return None
+
+        composed_pos, composed_quat = _compose_pos_quat(
+            mapping["pos"],
+            mapping["quat"],
+            composed_pos,
+            composed_quat,
+        )
+        parent_name = mapping["parent"]
+        body = _find_body(mjcf_root, parent_name)
+        if body is not None:
+            return body, composed_pos, composed_quat
+        current = parent_name
+
+    return None
+
+
 def _material_rgba(root: ET.Element, visual: ET.Element) -> str:
     material = visual.find("material")
     if material is None:
@@ -271,12 +380,17 @@ def _remove_collision_geoms(root: ET.Element) -> None:
                 body.remove(geom)
 
 
-def _restore_visual_mesh_geoms(root: ET.Element, visual_meshes: list[dict[str, str]]) -> None:
+def _restore_visual_mesh_geoms(
+    root: ET.Element,
+    visual_meshes: list[dict[str, str]],
+    fixed_origins: dict[str, dict[str, Any]] | None = None,
+) -> None:
     asset = root.find("asset")
     if asset is None:
         asset = ET.Element("asset")
         root.insert(0, asset)
 
+    fixed_origins = fixed_origins or {}
     existing_meshes = {mesh.get("name") for mesh in asset.findall("mesh") if mesh.get("name")}
     for visual in visual_meshes:
         if visual["mesh_name"] not in existing_meshes:
@@ -293,10 +407,32 @@ def _restore_visual_mesh_geoms(root: ET.Element, visual_meshes: list[dict[str, s
             existing_meshes.add(visual["mesh_name"])
 
         body = _find_body(root, visual["body"])
+        geom_pose: dict[str, str] = {}
         if body is None:
-            raise AiSapiensMJCFError(
-                f"Cannot restore visual mesh {visual['mesh_name']}: body {visual['body']} not found."
-            )
+            # Fixed-joint links (e.g. head_link) are fused into the parent by
+            # MuJoCo's URDF compiler. Place the geom on the surviving parent with
+            # the composed fixed-joint + visual origin.
+            placement = _resolve_fused_body_placement(visual["body"], root, fixed_origins)
+            if placement is None:
+                print(
+                    f"[WARN]: Skipping visual mesh {visual['mesh_name']}: "
+                    f"body {visual['body']} not found after URDF compile and "
+                    "no fixed-joint parent mapping exists."
+                )
+                continue
+            body, fuse_pos, fuse_quat = placement
+            visual_pos = _parse_float_list(visual.get("pos"), (0.0, 0.0, 0.0))
+            visual_quat = _parse_float_list(visual.get("quat"), (1.0, 0.0, 0.0, 0.0))
+            geom_pos, geom_quat = _compose_pos_quat(fuse_pos, fuse_quat, visual_pos, visual_quat)
+            if any(abs(value) > 1e-12 for value in geom_pos):
+                geom_pose["pos"] = _format_float_list(geom_pos)
+            if any(abs(geom_quat[index] - (1.0 if index == 0 else 0.0)) > 1e-12 for index in range(4)):
+                geom_pose["quat"] = _format_float_list(geom_quat)
+        else:
+            for key in ("pos", "quat"):
+                if key in visual:
+                    geom_pose[key] = visual[key]
+
         if any(geom.get("mesh") == visual["mesh_name"] for geom in body.findall("geom")):
             continue
 
@@ -309,9 +445,7 @@ def _restore_visual_mesh_geoms(root: ET.Element, visual_meshes: list[dict[str, s
             "rgba": visual["rgba"],
             "mesh": visual["mesh_name"],
         }
-        for key in ("pos", "quat"):
-            if key in visual:
-                geom_attributes[key] = visual[key]
+        geom_attributes.update(geom_pose)
         body.append(ET.Element("geom", geom_attributes))
 
 
@@ -391,6 +525,7 @@ def _compile_urdf_to_mjcf(
         source_meshdir=source_meshdir,
     )
     visual_meshes = _collect_urdf_visual_meshes(root)
+    fixed_origins = _collect_fixed_joint_origins(root)
     _replace_unsupported_urdf_meshes(root)
     _add_floating_root_to_urdf(root, patch["floating_base"])
 
@@ -407,7 +542,7 @@ def _compile_urdf_to_mjcf(
     mujoco.mj_saveLastXML(str(compiled_mjcf), model)
     tree = ET.parse(compiled_mjcf)
     _remove_collision_geoms(tree.getroot())
-    _restore_visual_mesh_geoms(tree.getroot(), visual_meshes)
+    _restore_visual_mesh_geoms(tree.getroot(), visual_meshes, fixed_origins)
     return tree
 
 

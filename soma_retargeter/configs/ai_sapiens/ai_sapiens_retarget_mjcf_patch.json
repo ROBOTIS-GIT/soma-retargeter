@@ -1,6 +1,6 @@
 {
   "source_repo": "https://github.com/ROBOTIS-GIT/ai_sapiens.git",
-  "source_commit": "0958865dc86fd937050cc0fe4116191837842ed5",
+  "source_commit": "6a2af375bbd763b7ca5f38c87169e7b0247cd753",
   "source_urdf": "third_party/ai_sapiens/ai_sapiens_description/urdf/k1_rev1/k1.urdf",
   "source_meshdir": "third_party/ai_sapiens/ai_sapiens_description/meshes/k1_rev1",
   "urdf_package_mesh_prefix": "package://ai_sapiens_description/meshes/k1_rev1",
