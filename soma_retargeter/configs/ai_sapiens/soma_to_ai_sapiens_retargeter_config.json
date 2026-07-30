@@ -3,11 +3,11 @@
   "num_initialization_frames": 10,
   "num_stabilization_frames": 5,
   "human_robot_scaler_config": "ai_sapiens/soma_to_ai_sapiens_target_frame_scaler_config.json",
-  "feet_stabilizer_config": "unitree_g1/g1_feet_stabilizer_config.json",
+  "feet_stabilizer_config": "ai_sapiens/ai_sapiens_feet_stabilizer_config.json",
   "model_height": 1.7,
-  "ik_iterations": 180,
+  "ik_iterations": 24,
   "joint_limit_weight": 10.0,
-  "smooth_joint_filter_weight": 66.45,
+  "smooth_joint_filter_weight": 12.0,
   "collision_weight": 0.0,
   "enable_post_processing": false,
   "smooth_joint_filter_objective_body_masks": {
@@ -18,6 +18,10 @@
     "right_shoulder_roll_link": 1.0,
     "right_shoulder_yaw_link": 0.3
   },
+  "smooth_joint_filter_reference_objective_body_masks": {
+    "left_shoulder_roll_link": 1.0,
+    "right_shoulder_roll_link": 1.0
+  },
   "ik_map": {
     "Hips": {
       "t_body": "pelvis",
@@ -26,47 +30,47 @@
       "r_weight": 11.0
     },
     "Chest": {
-      "t_body": "chest_g1_torso_proxy",
-      "r_body": "chest_g1_torso_proxy",
+      "t_body": "chest_torso_proxy",
+      "r_body": "chest_torso_proxy",
       "t_weight": 60.0,
       "r_weight": 20.0
     },
     "LeftArm": {
-      "t_body": "left_shoulder_roll_g1_proxy",
-      "r_body": "left_shoulder_roll_g1_proxy",
+      "t_body": "left_shoulder_roll_proxy",
+      "r_body": "left_shoulder_roll_proxy",
       "t_weight": 1.4,
       "r_weight": 0.18
     },
     "LeftForeArm": {
-      "t_body": "left_elbow_g1_proxy",
-      "r_body": "left_elbow_g1_proxy",
+      "t_body": "left_elbow_proxy",
+      "r_body": "left_elbow_proxy",
       "t_weight": 1.0,
       "r_weight": 0.7
     },
-    "LeftHand": {
-      "t_body": "left_wrist_yaw_g1_proxy",
-      "r_body": "left_wrist_yaw_g1_proxy",
-      "t_weight": 1.6,
-      "r_weight": 0.55
-    },
+        "LeftHand": {
+            "t_body": "left_hand_tcp",
+            "r_body": "left_wrist_yaw_proxy",
+            "t_weight": 2.8,
+            "r_weight": 0.45
+        },
     "RightArm": {
-      "t_body": "right_shoulder_roll_g1_proxy",
-      "r_body": "right_shoulder_roll_g1_proxy",
+      "t_body": "right_shoulder_roll_proxy",
+      "r_body": "right_shoulder_roll_proxy",
       "t_weight": 1.4,
       "r_weight": 0.18
     },
     "RightForeArm": {
-      "t_body": "right_elbow_g1_proxy",
-      "r_body": "right_elbow_g1_proxy",
+      "t_body": "right_elbow_proxy",
+      "r_body": "right_elbow_proxy",
       "t_weight": 1.0,
       "r_weight": 0.7
     },
-    "RightHand": {
-      "t_body": "right_wrist_yaw_g1_proxy",
-      "r_body": "right_wrist_yaw_g1_proxy",
-      "t_weight": 1.6,
-      "r_weight": 0.55
-    },
+        "RightHand": {
+            "t_body": "right_hand_tcp",
+            "r_body": "right_wrist_yaw_proxy",
+            "t_weight": 2.8,
+            "r_weight": 0.45
+        },
     "LeftLeg": {
       "t_body": "left_hip_roll_link",
       "r_body": "left_hip_roll_link",
@@ -108,7 +112,7 @@
   "robot_mjcf": "ai_sapiens/ai_sapiens_retarget.xml",
   "neutral_reference_weight": 0.35,
   "reset_solver_state_at_output_start": false,
-  "enable_solver_stage_trace": true,
+  "enable_solver_stage_trace": false,
   "enable_ai_sapiens_arm_projection": false,
   "enable_ai_sapiens_leg_projection": true,
   "enable_ai_sapiens_dynamic_lateral_correction": false,
@@ -117,23 +121,67 @@
   "enable_ai_sapiens_source_foot_orientation_correction": false,
   "enable_ai_sapiens_chest_anchored_arm_root_correction": false,
   "enable_ai_sapiens_output_joint_safety_margin": false,
-  "enable_ai_sapiens_output_joint_step_limit": false,
+  "enable_ai_sapiens_output_joint_step_limit": true,
+  "ai_sapiens_output_joint_step_limits_rad": {
+    "left_shoulder_pitch_joint": {"max_velocity_deg_per_sec": 720.0},
+    "left_shoulder_roll_joint": {"max_velocity_deg_per_sec": 720.0},
+    "left_shoulder_yaw_joint": {"max_velocity_deg_per_sec": 720.0},
+    "left_elbow_joint": {"max_velocity_deg_per_sec": 720.0},
+    "left_wrist_roll_joint": {"max_velocity_deg_per_sec": 720.0},
+    "right_shoulder_pitch_joint": {"max_velocity_deg_per_sec": 720.0},
+    "right_shoulder_roll_joint": {"max_velocity_deg_per_sec": 720.0},
+    "right_shoulder_yaw_joint": {"max_velocity_deg_per_sec": 720.0},
+    "right_elbow_joint": {"max_velocity_deg_per_sec": 720.0},
+    "right_wrist_roll_joint": {"max_velocity_deg_per_sec": 720.0}
+  },
+  "enable_ai_sapiens_adaptive_output_joint_step_limit": true,
+  "ai_sapiens_adaptive_output_joint_step_trigger_ratio": 1.25,
+  "ai_sapiens_adaptive_output_joint_step_consistency_frames": 2,
+  "ai_sapiens_adaptive_output_joint_step_fast_velocity_deg_per_sec": {
+    "left_shoulder_pitch_joint": 3240.0,
+    "left_shoulder_roll_joint": 1440.0,
+    "left_shoulder_yaw_joint": 3240.0,
+    "left_elbow_joint": 3240.0,
+    "left_wrist_roll_joint": 3240.0,
+    "right_shoulder_pitch_joint": 3240.0,
+    "right_shoulder_roll_joint": 1440.0,
+    "right_shoulder_yaw_joint": 3240.0,
+    "right_elbow_joint": 3240.0,
+    "right_wrist_roll_joint": 3240.0
+  },
   "enable_ai_sapiens_root_orientation_step_limit": false,
+  "enable_ai_sapiens_arm_temporal_regularization": true,
+  "ai_sapiens_arm_temporal_step_weight": 0.18,
+  "ai_sapiens_arm_temporal_acceleration_weight": 0.08,
+  "ai_sapiens_arm_temporal_max_correction_rad": 0.035,
   "_provenance": {
-    "purpose": "AI Sapiens direct candidate using G1 IK objective policy and G1-style target frames",
-    "source_retargeter": "soma_retargeter/configs/unitree_g1/soma_to_g1_retargeter_config.json",
+    "purpose": "AI Sapiens direct retargeting using AI Sapiens proxy bodies and target frames",
     "body_mapping": {
-      "torso_link": "chest_g1_torso_proxy",
-      "left_shoulder_roll_link": "left_shoulder_roll_g1_proxy",
-      "right_shoulder_roll_link": "right_shoulder_roll_g1_proxy",
-      "left_elbow_link": "left_elbow_g1_proxy",
-      "right_elbow_link": "right_elbow_g1_proxy",
-      "left_wrist_yaw_link": "left_wrist_yaw_g1_proxy",
-      "right_wrist_yaw_link": "right_wrist_yaw_g1_proxy"
+      "torso_link": "chest_torso_proxy",
+      "left_shoulder_roll_link": "left_shoulder_roll_proxy",
+      "right_shoulder_roll_link": "right_shoulder_roll_proxy",
+      "left_elbow_link": "left_elbow_proxy",
+      "right_elbow_link": "right_elbow_proxy",
+      "left_wrist_yaw_link": "left_wrist_yaw_proxy",
+      "right_wrist_yaw_link": "right_wrist_yaw_proxy"
     },
     "disabled_ai_sapiens_preprocess": "all projection/dynamic-lateral/source-foot/chest-anchor/safety-step disabled for pure target-frame check"
   },
-  "enable_ai_sapiens_hand_hip_target_clearance": false,
+  "enable_ai_sapiens_hand_hip_target_clearance": true,
+  "ai_sapiens_hand_hip_clearance_mode": "guarded_pelvis_local_radial_corridor",
+  "ai_sapiens_hand_hip_clearance_detect_m": 0.095,
+  "ai_sapiens_hand_hip_clearance_margin_m": 0.025,
+  "ai_sapiens_hand_hip_clearance_gain": 1.0,
+  "ai_sapiens_hand_hip_clearance_max_shift_m": 0.065,
+  "ai_sapiens_hand_hip_clearance_max_shift_step_m": 0.014,
+  "ai_sapiens_hand_hip_clearance_smooth_window": 5,
+  "ai_sapiens_hand_hip_clearance_chain_weights": {
+    "hand": 1.0,
+    "forearm": 0.45,
+    "arm": 0.2
+  },
+  "ai_sapiens_hand_hip_clearance_cross_side_drop_guard_m": 0.005,
+  "ai_sapiens_hand_hip_clearance_min_same_side_gain_m": 0.0005,
   "enable_ai_sapiens_feasible_arm_target_reconstruction": false,
   "enable_ai_sapiens_adaptive_arm_objective": false,
   "enable_ai_sapiens_adaptive_arm_temporal_reference": false,
@@ -142,11 +190,36 @@
   "enable_ai_sapiens_soft_bend_wrist_reference": false,
   "enable_ai_sapiens_contact_gated_elbow_midpoint_hint": false,
   "enable_ai_sapiens_contact_micro_wrist_reference": false,
-  "enable_ai_sapiens_capsule_proxy_barrier": false,
+  "enable_ai_sapiens_hand_hip_branch_reference": false,
+  "ai_sapiens_hand_hip_branch_reference_weight": 0.0,
+  "ai_sapiens_hand_hip_branch_reference_detect_m": 0.245,
+  "ai_sapiens_hand_hip_branch_reference_full_weight_m": 0.195,
+  "ai_sapiens_hand_hip_branch_reference_max_hand_z_rel_m": 0.06,
+  "ai_sapiens_hand_hip_branch_reference_target_roll_deg": 42.0,
+  "ai_sapiens_hand_hip_branch_reference_smooth_window": 15,
+  "ai_sapiens_hand_hip_branch_reference_start_after_warmup": true,
+  "enable_ai_sapiens_capsule_proxy_barrier": true,
+  "ai_sapiens_capsule_proxy_barrier_clearance_m": 0.06,
+  "ai_sapiens_capsule_proxy_barrier_pair_clearance_m": {
+    "left_hand_tcp_to_pelvis_left_hip": 0.08,
+    "left_hand_tcp_to_pelvis_torso_centerline": 0.08,
+    "left_wrist_to_pelvis_left_hip": 0.065,
+    "left_wrist_to_pelvis_torso_centerline": 0.065,
+    "left_elbow_to_pelvis_left_hip": 0.045,
+    "right_hand_tcp_to_pelvis_right_hip": 0.08,
+    "right_hand_tcp_to_pelvis_torso_centerline": 0.08,
+    "right_wrist_to_pelvis_right_hip": 0.065,
+    "right_wrist_to_pelvis_torso_centerline": 0.065,
+    "right_elbow_to_pelvis_right_hip": 0.045
+  },
+  "ai_sapiens_capsule_proxy_barrier_weight": 8.0,
+  "ai_sapiens_capsule_proxy_barrier_risk_distance_m": 0.14,
+  "ai_sapiens_capsule_proxy_barrier_always_active": false,
+  "ai_sapiens_capsule_proxy_barrier_mask_smooth_window": 15,
   "enable_ai_sapiens_window_endpoint_release": false,
   "enable_ai_sapiens_sparse_pelvis_local_corridor": false,
   "enable_ai_sapiens_forearm_segment_corridor": false,
-  "enable_ai_sapiens_risk_window_forearm_priority": true,
+  "enable_ai_sapiens_risk_window_forearm_priority": false,
   "enable_ai_sapiens_arm_segment_direction_objective": true,
   "_v139_base": "ai_sapiens/soma_to_ai_sapiens_retargeter_config.json",
   "enable_ai_sapiens_source_body_frame_preservation": true,
@@ -167,10 +240,35 @@
   "ai_sapiens_arm_bend_require_contact_risk": false,
   "ai_sapiens_arm_bend_contact_risk_distance_m": 0.14,
   "neutral_reference_objective_body_masks": {
-    "torso_link": 1.0
+    "torso_link": 1.0,
+    "left_shoulder_roll_link": 1.0,
+    "right_shoulder_roll_link": 1.0
   },
-  "enable_ai_sapiens_risk_window_torso_lock": true,
-  "enable_ai_sapiens_risk_window_absolute_weights": true,
+  "enable_ai_sapiens_source_rest_arm_neutral_reference": true,
+  "ai_sapiens_source_rest_arm_neutral_reference_weight": 0.05,
+  "ai_sapiens_source_rest_arm_neutral_reference_distance_threshold_m": 0.09,
+  "ai_sapiens_source_rest_arm_neutral_reference_full_weight_distance_m": 0.035,
+  "ai_sapiens_source_rest_arm_neutral_reference_smooth_window": 5,
+  "ai_sapiens_source_rest_arm_neutral_reference_start_after_warmup": true,
+  "ai_sapiens_source_rest_arm_neutral_reference_disable_during_capsule_barrier": false,
+  "ai_sapiens_source_rest_arm_neutral_reference_body_masks": {
+    "left": {
+      "left_shoulder_pitch_link": 0.5,
+      "left_shoulder_roll_link": 0.6,
+      "left_shoulder_yaw_link": 0.5,
+      "left_elbow_link": 0.35,
+      "left_wrist_roll_rubber_hand": 0.25
+    },
+    "right": {
+      "right_shoulder_pitch_link": 0.5,
+      "right_shoulder_roll_link": 0.6,
+      "right_shoulder_yaw_link": 0.5,
+      "right_elbow_link": 0.35,
+      "right_wrist_roll_rubber_hand": 0.25
+    }
+  },
+  "enable_ai_sapiens_risk_window_torso_lock": false,
+  "enable_ai_sapiens_risk_window_absolute_weights": false,
   "ai_sapiens_risk_window_capsule_threshold_m": 0.15,
   "ai_sapiens_risk_window_source_elbow_active_deg": 170.0,
   "ai_sapiens_risk_window_near_max_margin_m": 0.02,
@@ -196,9 +294,10 @@
   "ai_sapiens_risk_window_hips_t_scale": 1.0,
   "ai_sapiens_risk_window_hips_r_scale": 1.0,
   "enable_ai_sapiens_direct_body_chain_staged_solver": true,
+  "enable_ai_sapiens_direct_body_chain_graph_capture": true,
   "ai_sapiens_direct_body_chain_staged_start_after_warmup": true,
-  "ai_sapiens_direct_body_chain_stage1_iterations": 50,
-  "ai_sapiens_direct_body_chain_stage2_iterations": 120,
+  "ai_sapiens_direct_body_chain_stage1_iterations": 8,
+  "ai_sapiens_direct_body_chain_stage2_iterations": 16,
   "ai_sapiens_direct_body_chain_stage1_default_position_scale": 0.12,
   "ai_sapiens_direct_body_chain_stage1_default_rotation_scale": 0.05,
   "ai_sapiens_direct_body_chain_stage2_default_position_scale": 1.0,
@@ -222,8 +321,8 @@
     "RightArm": 0.35,
     "LeftForeArm": 0.15,
     "RightForeArm": 0.15,
-    "LeftHand": 0.05,
-    "RightHand": 0.05
+    "LeftHand": 0.08,
+    "RightHand": 0.08
   },
   "ai_sapiens_direct_body_chain_stage2_position_scales": {
     "Hips": 1.233,
@@ -232,8 +331,8 @@
     "RightArm": 1.25,
     "LeftForeArm": 1.09,
     "RightForeArm": 1.09,
-    "LeftHand": 1.08,
-    "RightHand": 1.08,
+    "LeftHand": 1.6,
+    "RightHand": 1.6,
     "LeftLeg": 1.3,
     "RightLeg": 1.3,
     "LeftShin": 1.3,
@@ -248,8 +347,8 @@
     "RightArm": 0.8,
     "LeftForeArm": 1.0,
     "RightForeArm": 1.0,
-    "LeftHand": 1.0,
-    "RightHand": 1.0,
+    "LeftHand": 0.4,
+    "RightHand": 0.4,
     "LeftLeg": 1.105,
     "RightLeg": 1.105,
     "LeftShin": 1.105,
@@ -486,6 +585,7 @@
       "ai_sapiens_risk_window_hips_t_scale": 1.0,
       "ai_sapiens_risk_window_hips_r_scale": 1.0,
       "enable_ai_sapiens_direct_body_chain_staged_solver": true,
+      "enable_ai_sapiens_direct_body_chain_graph_capture": true,
       "ai_sapiens_direct_body_chain_staged_start_after_warmup": true,
       "ai_sapiens_direct_body_chain_stage1_iterations": 50,
       "ai_sapiens_direct_body_chain_stage2_iterations": 120,

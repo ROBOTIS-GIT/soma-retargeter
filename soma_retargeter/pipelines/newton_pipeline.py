@@ -98,6 +98,7 @@ class NewtonPipeline:
         self.warmup_neutral_joint_names = retargeter_config.get('warmup_neutral_joint_names', [])
         self.enable_self_penetration = False
         self.smooth_joint_filter_coord_masks = None
+        self.smooth_joint_filter_reference_coord_masks = None
         self.neutral_reference_coord_masks = None
         self.ai_sapiens_temporal_yaw_twist_reference_coord_masks = None
         self.ai_sapiens_arm_ik_temporal_reference_coord_masks = None
@@ -264,6 +265,10 @@ class NewtonPipeline:
         self.ai_sapiens_direct_body_chain_staged_solver_enabled = (
             self.target_type == pipeline_utils.TargetType.AI_SAPIENS
             and bool(retargeter_config.get("enable_ai_sapiens_direct_body_chain_staged_solver", False))
+        )
+        self.ai_sapiens_direct_body_chain_graph_capture_enabled = (
+            self.target_type == pipeline_utils.TargetType.AI_SAPIENS
+            and bool(retargeter_config.get("enable_ai_sapiens_direct_body_chain_graph_capture", False))
         )
         self.ai_sapiens_direct_body_chain_staged_start_after_warmup = bool(
             retargeter_config.get("ai_sapiens_direct_body_chain_staged_start_after_warmup", True)
@@ -554,11 +559,21 @@ class NewtonPipeline:
         self.ai_sapiens_capsule_proxy_barrier_clearance_m = float(
             retargeter_config.get("ai_sapiens_capsule_proxy_barrier_clearance_m", 0.035)
         )
+        self.ai_sapiens_capsule_proxy_barrier_pair_clearance_m = retargeter_config.get(
+            "ai_sapiens_capsule_proxy_barrier_pair_clearance_m",
+            {},
+        )
         self.ai_sapiens_capsule_proxy_barrier_weight = float(
             retargeter_config.get("ai_sapiens_capsule_proxy_barrier_weight", 0.0)
         )
         self.ai_sapiens_capsule_proxy_barrier_risk_distance_m = float(
             retargeter_config.get("ai_sapiens_capsule_proxy_barrier_risk_distance_m", 0.12)
+        )
+        self.ai_sapiens_capsule_proxy_barrier_always_active = bool(
+            retargeter_config.get("ai_sapiens_capsule_proxy_barrier_always_active", False)
+        )
+        self.ai_sapiens_capsule_proxy_barrier_mask_smooth_window = int(
+            retargeter_config.get("ai_sapiens_capsule_proxy_barrier_mask_smooth_window", 1)
         )
         self.ai_sapiens_capsule_proxy_barrier_data = []
         self.ai_sapiens_bilateral_arm_bend_data = []
@@ -712,6 +727,10 @@ class NewtonPipeline:
         self.input_contact_micro_wrist_reference_trace = []
         self.input_capsule_proxy_barrier_active_masks = []
         self.input_capsule_proxy_barrier_trace = []
+        self.input_source_rest_arm_neutral_reference_masks = []
+        self.input_source_rest_arm_neutral_reference_trace = []
+        self.input_hand_hip_branch_reference_masks = []
+        self.input_hand_hip_branch_reference_trace = []
         self.input_risk_window_objective_scales = []
         self.ai_sapiens_arm_segment_direction_enabled = (
             self.target_type == pipeline_utils.TargetType.AI_SAPIENS
@@ -915,6 +934,36 @@ class NewtonPipeline:
             "ai_sapiens_output_joint_step_limits_rad",
             {},
         )
+        self.ai_sapiens_adaptive_output_joint_step_limit_enabled = (
+            self.target_type == pipeline_utils.TargetType.AI_SAPIENS
+            and bool(retargeter_config.get("enable_ai_sapiens_adaptive_output_joint_step_limit", False))
+        )
+        self.ai_sapiens_adaptive_output_joint_step_trigger_ratio = max(
+            1.0,
+            float(retargeter_config.get("ai_sapiens_adaptive_output_joint_step_trigger_ratio", 1.25)),
+        )
+        self.ai_sapiens_adaptive_output_joint_step_consistency_frames = max(
+            1,
+            int(retargeter_config.get("ai_sapiens_adaptive_output_joint_step_consistency_frames", 2)),
+        )
+        adaptive_step_fast_velocity_config = retargeter_config.get(
+            "ai_sapiens_adaptive_output_joint_step_fast_velocity_deg_per_sec",
+            {},
+        )
+        self.ai_sapiens_adaptive_output_joint_step_fast_velocity_rad = {}
+        for joint_name, value in adaptive_step_fast_velocity_config.items():
+            velocity = 0.0
+            if isinstance(value, dict):
+                if "max_velocity_rad_per_sec" in value:
+                    velocity = float(value.get("max_velocity_rad_per_sec", 0.0))
+                elif "max_velocity_deg_per_sec" in value:
+                    velocity = np.deg2rad(float(value.get("max_velocity_deg_per_sec", 0.0)))
+            else:
+                velocity = np.deg2rad(float(value))
+            self.ai_sapiens_adaptive_output_joint_step_fast_velocity_rad[str(joint_name)] = max(
+                0.0,
+                float(velocity),
+            )
         self.ai_sapiens_output_joint_step_limit_specs = []
         self.ai_sapiens_root_orientation_step_limit_enabled = (
             self.target_type == pipeline_utils.TargetType.AI_SAPIENS
@@ -988,6 +1037,72 @@ class NewtonPipeline:
             "ai_sapiens_arm_ik_temporal_reference_body_masks",
             {},
         )
+        self.ai_sapiens_source_rest_arm_neutral_reference_enabled = (
+            self.target_type == pipeline_utils.TargetType.AI_SAPIENS
+            and bool(retargeter_config.get("enable_ai_sapiens_source_rest_arm_neutral_reference", False))
+        )
+        self.ai_sapiens_source_rest_arm_neutral_reference_weight = float(
+            retargeter_config.get("ai_sapiens_source_rest_arm_neutral_reference_weight", 0.0)
+        )
+        self.ai_sapiens_source_rest_arm_neutral_reference_distance_threshold_m = float(
+            retargeter_config.get("ai_sapiens_source_rest_arm_neutral_reference_distance_threshold_m", 0.09)
+        )
+        self.ai_sapiens_source_rest_arm_neutral_reference_full_weight_distance_m = float(
+            retargeter_config.get("ai_sapiens_source_rest_arm_neutral_reference_full_weight_distance_m", 0.035)
+        )
+        self.ai_sapiens_source_rest_arm_neutral_reference_smooth_window = int(
+            retargeter_config.get("ai_sapiens_source_rest_arm_neutral_reference_smooth_window", 5)
+        )
+        self.ai_sapiens_source_rest_arm_neutral_reference_start_after_warmup = bool(
+            retargeter_config.get("ai_sapiens_source_rest_arm_neutral_reference_start_after_warmup", True)
+        )
+        self.ai_sapiens_source_rest_arm_neutral_reference_disable_during_capsule_barrier = bool(
+            retargeter_config.get(
+                "ai_sapiens_source_rest_arm_neutral_reference_disable_during_capsule_barrier",
+                True,
+            )
+        )
+        self.ai_sapiens_source_rest_arm_neutral_reference_body_masks = retargeter_config.get(
+            "ai_sapiens_source_rest_arm_neutral_reference_body_masks",
+            {},
+        )
+        self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks = {
+            "left": None,
+            "right": None,
+        }
+        self.ai_sapiens_hand_hip_branch_reference_enabled = (
+            self.target_type == pipeline_utils.TargetType.AI_SAPIENS
+            and bool(retargeter_config.get("enable_ai_sapiens_hand_hip_branch_reference", False))
+        )
+        self.ai_sapiens_hand_hip_branch_reference_weight = float(
+            retargeter_config.get("ai_sapiens_hand_hip_branch_reference_weight", 0.0)
+        )
+        self.ai_sapiens_hand_hip_branch_reference_detect_m = float(
+            retargeter_config.get("ai_sapiens_hand_hip_branch_reference_detect_m", 0.24)
+        )
+        self.ai_sapiens_hand_hip_branch_reference_full_weight_m = float(
+            retargeter_config.get("ai_sapiens_hand_hip_branch_reference_full_weight_m", 0.18)
+        )
+        self.ai_sapiens_hand_hip_branch_reference_max_hand_z_rel_m = float(
+            retargeter_config.get("ai_sapiens_hand_hip_branch_reference_max_hand_z_rel_m", 0.05)
+        )
+        self.ai_sapiens_hand_hip_branch_reference_target_roll_deg = float(
+            retargeter_config.get("ai_sapiens_hand_hip_branch_reference_target_roll_deg", 42.0)
+        )
+        self.ai_sapiens_hand_hip_branch_reference_smooth_window = int(
+            retargeter_config.get("ai_sapiens_hand_hip_branch_reference_smooth_window", 15)
+        )
+        self.ai_sapiens_hand_hip_branch_reference_start_after_warmup = bool(
+            retargeter_config.get("ai_sapiens_hand_hip_branch_reference_start_after_warmup", True)
+        )
+        self.ai_sapiens_hand_hip_branch_reference_coord_masks = {
+            "left": None,
+            "right": None,
+        }
+        self.ai_sapiens_hand_hip_branch_reference_q_indices = {
+            "left": [],
+            "right": [],
+        }
         self.ai_sapiens_arm_nullspace_temporal_reference_enabled = (
             self.target_type == pipeline_utils.TargetType.AI_SAPIENS
             and bool(retargeter_config.get("enable_ai_sapiens_arm_nullspace_temporal_reference", False))
@@ -1169,6 +1284,9 @@ class NewtonPipeline:
                 if self.ai_sapiens_sparse_pelvis_local_corridor_enabled else 0.015,
             )
         )
+        self.ai_sapiens_hand_hip_clearance_max_shift_step_m = float(
+            retargeter_config.get("ai_sapiens_hand_hip_clearance_max_shift_step_m", 0.0)
+        )
         self.ai_sapiens_hand_hip_clearance_smooth_window = int(
             retargeter_config.get("ai_sapiens_hand_hip_clearance_smooth_window", 5)
         )
@@ -1206,6 +1324,10 @@ class NewtonPipeline:
         )
         self.ai_sapiens_hand_hip_clearance_window_min_same_gain_p50_m = float(
             retargeter_config.get("ai_sapiens_hand_hip_clearance_window_min_same_gain_p50_m", 0.0)
+        )
+        self.ai_sapiens_hand_hip_clearance_chain_weights = retargeter_config.get(
+            "ai_sapiens_hand_hip_clearance_chain_weights",
+            {"hand": 1.0, "forearm": 0.0, "arm": 0.0},
         )
         self.input_target_preprocess_summaries = []
         self.input_target_stage_traces = []
@@ -1245,6 +1367,10 @@ class NewtonPipeline:
                 ["left_shoulder_pitch_joint", "left_shoulder_yaw_joint", "left_elbow_joint"])
             self.ai_sapiens_right_arm_branch_q_indices = self._build_joint_q_indices(
                 ["right_shoulder_pitch_joint", "right_shoulder_yaw_joint", "right_elbow_joint"])
+            self.ai_sapiens_hand_hip_branch_reference_q_indices["left"] = self._build_joint_q_indices(
+                ["left_shoulder_roll_joint"])
+            self.ai_sapiens_hand_hip_branch_reference_q_indices["right"] = self._build_joint_q_indices(
+                ["right_shoulder_roll_joint"])
             if (
                 self.ai_sapiens_arm_nullspace_temporal_reference_enabled
                 or self.ai_sapiens_sparse_wrist_roll_resolve_enabled
@@ -1257,6 +1383,16 @@ class NewtonPipeline:
             ):
                 self.ai_sapiens_arm_branch_nullspace_coord_masks = self._joint_coord_mask_from_q_indices(
                     self.ai_sapiens_arm_branch_nullspace_q_indices)
+            if (
+                self.ai_sapiens_hand_hip_branch_reference_enabled
+                and self.ai_sapiens_hand_hip_branch_reference_weight > 0.0
+            ):
+                for side in ("left", "right"):
+                    self.ai_sapiens_hand_hip_branch_reference_coord_masks[side] = (
+                        self._joint_coord_mask_from_q_indices(
+                            self.ai_sapiens_hand_hip_branch_reference_q_indices[side]
+                        )
+                    )
 
             (
                 self.mapped_joints,
@@ -1324,6 +1460,13 @@ class NewtonPipeline:
                 self.smooth_joint_filter_coord_masks = newton_utils.create_joint_coord_masks(
                     self.ik_model, smooth_joint_filter_objective_body_masks, 0.0)
 
+            smooth_joint_filter_reference_body_masks = retargeter_config.get(
+                'smooth_joint_filter_reference_objective_body_masks',
+                None)
+            if smooth_joint_filter_reference_body_masks is not None:
+                self.smooth_joint_filter_reference_coord_masks = newton_utils.create_joint_coord_masks(
+                    self.ik_model, smooth_joint_filter_reference_body_masks, 0.0)
+
             neutral_reference_objective_body_masks = retargeter_config.get('neutral_reference_objective_body_masks', None)
             if neutral_reference_objective_body_masks is not None:
                 self.neutral_reference_coord_masks = newton_utils.create_joint_coord_masks(
@@ -1352,6 +1495,38 @@ class NewtonPipeline:
                         0.0,
                     )
                 )
+
+            if (
+                self.ai_sapiens_source_rest_arm_neutral_reference_enabled
+                and self.ai_sapiens_source_rest_arm_neutral_reference_weight > 0.0
+            ):
+                default_rest_arm_masks = {
+                    "left": {
+                        "left_shoulder_pitch_link": 0.65,
+                        "left_shoulder_roll_link": 1.0,
+                        "left_shoulder_yaw_link": 0.65,
+                        "left_elbow_link": 0.50,
+                        "left_wrist_roll_rubber_hand": 0.35,
+                    },
+                    "right": {
+                        "right_shoulder_pitch_link": 0.65,
+                        "right_shoulder_roll_link": 1.0,
+                        "right_shoulder_yaw_link": 0.65,
+                        "right_elbow_link": 0.50,
+                        "right_wrist_roll_rubber_hand": 0.35,
+                    },
+                }
+                configured_masks = self.ai_sapiens_source_rest_arm_neutral_reference_body_masks or {}
+                for side in ("left", "right"):
+                    side_masks = configured_masks.get(side, default_rest_arm_masks[side])
+                    if side_masks:
+                        self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks[side] = (
+                            newton_utils.create_joint_coord_masks(
+                                self.ik_model,
+                                side_masks,
+                                0.0,
+                            )
+                        )
 
             effector_names = self.human_robot_scaler.effector_names()
             self.target_effector_indices = [effector_names.index(name) for name in self.mapped_joints]
@@ -1416,6 +1591,10 @@ class NewtonPipeline:
         self.input_contact_micro_wrist_reference_trace = []
         self.input_capsule_proxy_barrier_active_masks = []
         self.input_capsule_proxy_barrier_trace = []
+        self.input_source_rest_arm_neutral_reference_masks = []
+        self.input_source_rest_arm_neutral_reference_trace = []
+        self.input_hand_hip_branch_reference_masks = []
+        self.input_hand_hip_branch_reference_trace = []
         self.input_risk_window_objective_scales = []
         self.last_internal_trace = None
         self.last_solver_stage_trace = None
@@ -1589,8 +1768,6 @@ class NewtonPipeline:
                 "enabled": bool(self.ai_sapiens_hand_hip_target_clearance_enabled),
                 "hand_count": 0,
             }
-            if self.ai_sapiens_hand_hip_target_clearance_enabled:
-                targets, hand_hip_clearance_summary = self._apply_ai_sapiens_hand_hip_target_clearance(targets)
             target_after_hand_hip_clearance = targets.copy()
             forearm_segment_corridor_summary = {
                 "enabled": bool(self.ai_sapiens_forearm_segment_corridor_enabled),
@@ -1658,7 +1835,18 @@ class NewtonPipeline:
                     )
             target_after_arm_segment_direction = targets.copy()
             target_after_arm_feasible_projection_post_direction = targets.copy()
+            if self.ai_sapiens_hand_hip_target_clearance_enabled:
+                targets, hand_hip_clearance_summary = self._apply_ai_sapiens_hand_hip_target_clearance(targets)
+            target_after_hand_hip_clearance = targets.copy()
             target_after_arm_projection = targets.copy()
+            (
+                source_rest_arm_neutral_reference_masks,
+                source_rest_arm_neutral_reference_trace,
+            ) = self._compute_ai_sapiens_source_rest_arm_neutral_reference_masks(targets)
+            (
+                hand_hip_branch_reference_masks,
+                hand_hip_branch_reference_trace,
+            ) = self._compute_ai_sapiens_hand_hip_branch_reference_masks(targets)
             adaptive_arm_summary = {
                 "enabled": bool(self.ai_sapiens_adaptive_arm_objective_enabled),
                 "chain_count": int(len(self.ai_sapiens_adaptive_arm_objective_data)),
@@ -1767,6 +1955,27 @@ class NewtonPipeline:
                 capsule_barrier_trace,
                 capsule_barrier_summary,
             ) = self._compute_ai_sapiens_capsule_proxy_barrier_masks(targets)
+            if (
+                self.ai_sapiens_source_rest_arm_neutral_reference_disable_during_capsule_barrier
+                and source_rest_arm_neutral_reference_masks.size
+                and capsule_barrier_active_masks.size
+                and self.ai_sapiens_capsule_proxy_barrier_data
+            ):
+                for side_idx, side_name in enumerate(("left", "right")):
+                    pair_indices = [
+                        pair_idx
+                        for pair_idx, pair in enumerate(self.ai_sapiens_capsule_proxy_barrier_data)
+                        if str(pair.get("side")) == side_name
+                    ]
+                    if not pair_indices:
+                        continue
+                    side_barrier_active = np.max(capsule_barrier_active_masks[:, pair_indices], axis=1)
+                    source_rest_arm_neutral_reference_masks[:, side_idx] *= (
+                        1.0 - np.clip(side_barrier_active, 0.0, 1.0)
+                    ).astype(np.float32)
+                    source_rest_arm_neutral_reference_trace[:, side_idx, 5] = (
+                        source_rest_arm_neutral_reference_masks[:, side_idx]
+                    )
             (
                 risk_window_scale_trace,
                 risk_window_summary,
@@ -1803,6 +2012,18 @@ class NewtonPipeline:
             self.input_contact_micro_wrist_reference_trace.append(contact_wrist_trace)
             self.input_capsule_proxy_barrier_active_masks.append(capsule_barrier_active_masks)
             self.input_capsule_proxy_barrier_trace.append(capsule_barrier_trace)
+            self.input_source_rest_arm_neutral_reference_masks.append(
+                source_rest_arm_neutral_reference_masks
+            )
+            self.input_source_rest_arm_neutral_reference_trace.append(
+                source_rest_arm_neutral_reference_trace
+            )
+            self.input_hand_hip_branch_reference_masks.append(
+                hand_hip_branch_reference_masks
+            )
+            self.input_hand_hip_branch_reference_trace.append(
+                hand_hip_branch_reference_trace
+            )
             self.input_sample_rates.append(buffers[i].sample_rate)
             self.input_target_stage_traces.append({
                 "target_raw_scaled": target_raw_scaled,
@@ -1865,6 +2086,10 @@ class NewtonPipeline:
                 "contact_micro_wrist_reference_trace": contact_wrist_trace,
                 "capsule_proxy_barrier_active_mask": capsule_barrier_active_masks,
                 "capsule_proxy_barrier_trace": capsule_barrier_trace,
+                "source_rest_arm_neutral_reference_mask": source_rest_arm_neutral_reference_masks,
+                "source_rest_arm_neutral_reference_trace": source_rest_arm_neutral_reference_trace,
+                "hand_hip_branch_reference_mask": hand_hip_branch_reference_masks,
+                "hand_hip_branch_reference_trace": hand_hip_branch_reference_trace,
                 "window_endpoint_release_trace": window_endpoint_release_trace,
             })
             self.input_target_preprocess_summaries.append({
@@ -1892,12 +2117,28 @@ class NewtonPipeline:
                 "ai_sapiens_contact_gated_elbow_midpoint_hint": contact_elbow_summary,
                 "ai_sapiens_contact_micro_wrist_reference": contact_wrist_summary,
                 "ai_sapiens_capsule_proxy_barrier": capsule_barrier_summary,
+                "ai_sapiens_hand_hip_branch_reference": {
+                    "enabled": bool(self.ai_sapiens_hand_hip_branch_reference_enabled),
+                    "weight": float(self.ai_sapiens_hand_hip_branch_reference_weight),
+                    "detect_m": float(self.ai_sapiens_hand_hip_branch_reference_detect_m),
+                    "full_weight_m": float(self.ai_sapiens_hand_hip_branch_reference_full_weight_m),
+                    "max_hand_z_rel_m": float(self.ai_sapiens_hand_hip_branch_reference_max_hand_z_rel_m),
+                    "target_roll_deg": float(self.ai_sapiens_hand_hip_branch_reference_target_roll_deg),
+                    "smooth_window": int(self.ai_sapiens_hand_hip_branch_reference_smooth_window),
+                    "left_active_frames": int(np.count_nonzero(hand_hip_branch_reference_masks[:, 0] > 1.0e-6))
+                    if hand_hip_branch_reference_masks.size
+                    else 0,
+                    "right_active_frames": int(np.count_nonzero(hand_hip_branch_reference_masks[:, 1] > 1.0e-6))
+                    if hand_hip_branch_reference_masks.size
+                    else 0,
+                },
                 "ai_sapiens_arm_projection_post_direction": arm_projection_post_direction_summary,
                 "ai_sapiens_arm_projection": arm_projection_final_summary,
                 "ai_sapiens_hand_hip_target_clearance": hand_hip_clearance_summary,
                 "ai_sapiens_forearm_segment_corridor": forearm_segment_corridor_summary,
                 "ai_sapiens_window_endpoint_release": window_endpoint_release_summary,
                 "ai_sapiens_output_joint_safety_margin": self._ai_sapiens_output_joint_safety_margin_summary(),
+                "ai_sapiens_output_joint_step_limit": self._ai_sapiens_output_joint_step_limit_summary(),
                 "ai_sapiens_arm_temporal_regularization": self._ai_sapiens_arm_temporal_regularization_summary(),
             })
 
@@ -1985,6 +2226,10 @@ class NewtonPipeline:
                 f"stage2_iter={self.ai_sapiens_direct_body_chain_stage2_iterations})"
             )
             print(
+                "[INFO]\t  AI Sapiens Direct Body Chain Graph Capture: "
+                f"{self.ai_sapiens_direct_body_chain_graph_capture_enabled}"
+            )
+            print(
                 "[INFO]\t  AI Sapiens Limb Bend Angle Objective: "
                 f"{self.ai_sapiens_limb_bend_angle_objective_enabled} "
                 f"(weight={self.ai_sapiens_limb_bend_angle_weight:.6f}, "
@@ -2030,6 +2275,10 @@ class NewtonPipeline:
             neutral_reference_objective,
             temporal_yaw_twist_reference_objective,
             arm_ik_temporal_reference_objective,
+            source_rest_left_arm_neutral_reference_objective,
+            source_rest_right_arm_neutral_reference_objective,
+            hand_hip_left_branch_reference_objective,
+            hand_hip_right_branch_reference_objective,
             wrist_roll_nullspace_temporal_objective,
             arm_branch_nullspace_temporal_objective,
             elbow_branch_hint_objectives,
@@ -2064,6 +2313,30 @@ class NewtonPipeline:
             and self.ai_sapiens_arm_ik_temporal_reference_coord_masks is not None
         ):
             ik_solver_active_objectives.append(arm_ik_temporal_reference_objective)
+        if (
+            self.ai_sapiens_source_rest_arm_neutral_reference_enabled
+            and self.ai_sapiens_source_rest_arm_neutral_reference_weight > 0.0
+            and self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks["left"] is not None
+        ):
+            ik_solver_active_objectives.append(source_rest_left_arm_neutral_reference_objective)
+        if (
+            self.ai_sapiens_source_rest_arm_neutral_reference_enabled
+            and self.ai_sapiens_source_rest_arm_neutral_reference_weight > 0.0
+            and self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks["right"] is not None
+        ):
+            ik_solver_active_objectives.append(source_rest_right_arm_neutral_reference_objective)
+        if (
+            self.ai_sapiens_hand_hip_branch_reference_enabled
+            and self.ai_sapiens_hand_hip_branch_reference_weight > 0.0
+            and self.ai_sapiens_hand_hip_branch_reference_coord_masks["left"] is not None
+        ):
+            ik_solver_active_objectives.append(hand_hip_left_branch_reference_objective)
+        if (
+            self.ai_sapiens_hand_hip_branch_reference_enabled
+            and self.ai_sapiens_hand_hip_branch_reference_weight > 0.0
+            and self.ai_sapiens_hand_hip_branch_reference_coord_masks["right"] is not None
+        ):
+            ik_solver_active_objectives.append(hand_hip_right_branch_reference_objective)
         if (
             (
                 self.ai_sapiens_arm_nullspace_temporal_reference_enabled
@@ -2229,40 +2502,52 @@ class NewtonPipeline:
             "Hips": mapped_joint_to_objective_index.get("Hips"),
         }
 
+        def _build_direct_body_chain_stage_weights(
+            position_scales,
+            rotation_scales,
+            default_position_scale,
+            default_rotation_scale,
+        ):
+            position_weights = [
+                float(base_weight) * float(default_position_scale)
+                for base_weight in position_objective_base_weights
+            ]
+            rotation_weights = [
+                float(base_weight) * float(default_rotation_scale)
+                for base_weight in rotation_objective_base_weights
+            ]
+            for target_name, scale in position_scales.items():
+                target_idx = mapped_joint_to_objective_index.get(str(target_name))
+                if target_idx is not None and 0 <= target_idx < len(position_objectives):
+                    position_weights[target_idx] = position_objective_base_weights[target_idx] * float(scale)
+            for target_name, scale in rotation_scales.items():
+                target_idx = mapped_joint_to_objective_index.get(str(target_name))
+                if target_idx is not None and 0 <= target_idx < len(rotation_objectives):
+                    rotation_weights[target_idx] = rotation_objective_base_weights[target_idx] * float(scale)
+            return position_weights, rotation_weights
+
+        def _set_objective_weights(position_weights, rotation_weights):
+            for idx, objective in enumerate(position_objectives):
+                objective.weight = float(position_weights[idx])
+            for idx, objective in enumerate(rotation_objectives):
+                objective.weight = float(rotation_weights[idx])
+
         def _apply_direct_body_chain_stage_weights(
             position_scales,
             rotation_scales,
             default_position_scale,
             default_rotation_scale,
         ):
-            for idx, objective in enumerate(position_objectives):
-                objective.weight = (
-                    position_objective_base_weights[idx]
-                    * float(default_position_scale)
-                )
-            for idx, objective in enumerate(rotation_objectives):
-                objective.weight = (
-                    rotation_objective_base_weights[idx]
-                    * float(default_rotation_scale)
-                )
-            for target_name, scale in position_scales.items():
-                target_idx = mapped_joint_to_objective_index.get(str(target_name))
-                if target_idx is not None and 0 <= target_idx < len(position_objectives):
-                    position_objectives[target_idx].weight = (
-                        position_objective_base_weights[target_idx] * float(scale)
-                    )
-            for target_name, scale in rotation_scales.items():
-                target_idx = mapped_joint_to_objective_index.get(str(target_name))
-                if target_idx is not None and 0 <= target_idx < len(rotation_objectives):
-                    rotation_objectives[target_idx].weight = (
-                        rotation_objective_base_weights[target_idx] * float(scale)
-                    )
+            position_weights, rotation_weights = _build_direct_body_chain_stage_weights(
+                position_scales,
+                rotation_scales,
+                default_position_scale,
+                default_rotation_scale,
+            )
+            _set_objective_weights(position_weights, rotation_weights)
 
         def _restore_objective_weights(position_weights, rotation_weights):
-            for idx, objective in enumerate(position_objectives):
-                objective.weight = float(position_weights[idx])
-            for idx, objective in enumerate(rotation_objectives):
-                objective.weight = float(rotation_weights[idx])
+            _set_objective_weights(position_weights, rotation_weights)
 
         def _snapshot_objective_weights():
             return (
@@ -2270,8 +2555,31 @@ class NewtonPipeline:
                 [float(objective.weight) for objective in rotation_objectives],
             )
 
+        direct_body_chain_restore_weights = (
+            list(position_objective_base_weights),
+            list(rotation_objective_base_weights),
+        )
+        direct_body_chain_stage1_weights = _build_direct_body_chain_stage_weights(
+            self.ai_sapiens_direct_body_chain_stage1_position_scales,
+            self.ai_sapiens_direct_body_chain_stage1_rotation_scales,
+            self.ai_sapiens_direct_body_chain_stage1_default_position_scale,
+            self.ai_sapiens_direct_body_chain_stage1_default_rotation_scale,
+        )
+        direct_body_chain_stage2_weights = _build_direct_body_chain_stage_weights(
+            self.ai_sapiens_direct_body_chain_stage2_position_scales,
+            self.ai_sapiens_direct_body_chain_stage2_rotation_scales,
+            self.ai_sapiens_direct_body_chain_stage2_default_position_scale,
+            self.ai_sapiens_direct_body_chain_stage2_default_rotation_scale,
+        )
+        direct_body_chain_static_weights = (
+            not self.ai_sapiens_adaptive_arm_objective_enabled
+            and not self.ai_sapiens_risk_window_forearm_priority_enabled
+        )
+
         if self.neutral_reference_weight > 0.0 and self.neutral_reference_coord_masks is not None:
             neutral_reference_objective.set_target(default_joint_q)
+        if self.smooth_joint_filter_reference_coord_masks is not None:
+            smooth_joint_filter_objective.set_reference(default_joint_q)
         if (
             self.ai_sapiens_temporal_yaw_twist_reference_enabled
             and self.ai_sapiens_temporal_yaw_twist_reference_weight > 0.0
@@ -2284,6 +2592,34 @@ class NewtonPipeline:
             and self.ai_sapiens_arm_ik_temporal_reference_coord_masks is not None
         ):
             arm_ik_temporal_reference_objective.set_target(default_joint_q)
+        if (
+            self.ai_sapiens_source_rest_arm_neutral_reference_enabled
+            and self.ai_sapiens_source_rest_arm_neutral_reference_weight > 0.0
+        ):
+            if self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks["left"] is not None:
+                source_rest_left_arm_neutral_reference_objective.set_target(default_joint_q)
+                source_rest_left_arm_neutral_reference_objective.set_problem_masks(
+                    np.zeros((num_envs,), dtype=np.float32)
+                )
+            if self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks["right"] is not None:
+                source_rest_right_arm_neutral_reference_objective.set_target(default_joint_q)
+                source_rest_right_arm_neutral_reference_objective.set_problem_masks(
+                    np.zeros((num_envs,), dtype=np.float32)
+                )
+        if (
+            self.ai_sapiens_hand_hip_branch_reference_enabled
+            and self.ai_sapiens_hand_hip_branch_reference_weight > 0.0
+        ):
+            if self.ai_sapiens_hand_hip_branch_reference_coord_masks["left"] is not None:
+                hand_hip_left_branch_reference_objective.set_target(default_joint_q)
+                hand_hip_left_branch_reference_objective.set_problem_masks(
+                    np.zeros((num_envs,), dtype=np.float32)
+                )
+            if self.ai_sapiens_hand_hip_branch_reference_coord_masks["right"] is not None:
+                hand_hip_right_branch_reference_objective.set_target(default_joint_q)
+                hand_hip_right_branch_reference_objective.set_problem_masks(
+                    np.zeros((num_envs,), dtype=np.float32)
+                )
         if (
             self.ai_sapiens_arm_nullspace_temporal_reference_enabled
             or self.ai_sapiens_sparse_wrist_roll_resolve_enabled
@@ -2304,11 +2640,41 @@ class NewtonPipeline:
         ik_solver.reset()
 
         graph_capture = None
+        direct_body_chain_graph_capture = None
 
         def single_step():
             ik_solver.step(joint_q, joint_q, iterations=self.ik_iterations)
 
-        if (
+        def direct_body_chain_stage1_step():
+            ik_solver.step(
+                joint_q,
+                joint_q,
+                iterations=max(1, self.ai_sapiens_direct_body_chain_stage1_iterations),
+            )
+
+        def direct_body_chain_stage2_step():
+            ik_solver.step(
+                joint_q,
+                joint_q,
+                iterations=max(1, self.ai_sapiens_direct_body_chain_stage2_iterations),
+            )
+
+        can_capture_direct_body_chain_graph = (
+            wp.get_device().is_cuda
+            and self.ai_sapiens_direct_body_chain_graph_capture_enabled
+            and self.ai_sapiens_direct_body_chain_staged_solver_enabled
+            and direct_body_chain_static_weights
+            and not self.enable_solver_stage_trace
+        )
+        if can_capture_direct_body_chain_graph:
+            with wp.ScopedCapture() as cap:
+                _set_objective_weights(*direct_body_chain_stage1_weights)
+                direct_body_chain_stage1_step()
+                _set_objective_weights(*direct_body_chain_stage2_weights)
+                direct_body_chain_stage2_step()
+                _restore_objective_weights(*direct_body_chain_restore_weights)
+            direct_body_chain_graph_capture = cap.graph
+        elif (
             wp.get_device().is_cuda
             and not self.ai_sapiens_adaptive_arm_objective_enabled
             and not self.ai_sapiens_sparse_wrist_roll_resolve_enabled
@@ -2328,9 +2694,15 @@ class NewtonPipeline:
         #import time
         num_frames_to_remove = self.num_initialization_frames + self.num_stabilization_frames
         joint_q_data = [np.full((len(self.input_targets[i]),), None) for i in range(num_envs)]
+        pre_step_q_data = [np.full((len(self.input_targets[i]),), None) for i in range(num_envs)]
         solver_trace_arrays = None
         if self.enable_solver_stage_trace:
             q_trace_shape = (self.max_frames, num_envs, self.ik_model.joint_coord_count)
+            step_limit_trace_shape = (
+                self.max_frames,
+                num_envs,
+                len(self.ai_sapiens_output_joint_step_limit_specs),
+            )
             solver_trace_arrays = {
                 "q_before_solve": np.full(q_trace_shape, np.nan, dtype=np.float32),
                 "q_after_direct_body_chain_stage1": np.full(q_trace_shape, np.nan, dtype=np.float32),
@@ -2342,6 +2714,10 @@ class NewtonPipeline:
                 "q_after_joint_limit": np.full(q_trace_shape, np.nan, dtype=np.float32),
                 "q_after_output_safety_margin": np.full(q_trace_shape, np.nan, dtype=np.float32),
                 "q_after_output_joint_step_limit": np.full(q_trace_shape, np.nan, dtype=np.float32),
+                "output_joint_step_limit_effective_steps_rad": np.full(
+                    step_limit_trace_shape, np.nan, dtype=np.float32),
+                "output_joint_step_limit_adaptive_active_mask": np.zeros(
+                    step_limit_trace_shape, dtype=np.float32),
                 "q_after_root_orientation_step": np.full(q_trace_shape, np.nan, dtype=np.float32),
                 "q_after_arm_ik_temporal_reference": np.full(q_trace_shape, np.nan, dtype=np.float32),
                 "q_after_arm_temporal_regularization": np.full(q_trace_shape, np.nan, dtype=np.float32),
@@ -2467,6 +2843,55 @@ class NewtonPipeline:
                             else:
                                 arm_reference_q[env] = previous_np
                 arm_ik_temporal_reference_objective.set_target(arm_reference_q)
+
+            if (
+                self.ai_sapiens_source_rest_arm_neutral_reference_enabled
+                and self.ai_sapiens_source_rest_arm_neutral_reference_weight > 0.0
+            ):
+                left_problem_masks = np.zeros((num_envs,), dtype=np.float32)
+                right_problem_masks = np.zeros((num_envs,), dtype=np.float32)
+                for env in range(num_envs):
+                    if env >= len(self.input_source_rest_arm_neutral_reference_masks):
+                        continue
+                    side_masks = self.input_source_rest_arm_neutral_reference_masks[env]
+                    if frame >= side_masks.shape[0]:
+                        continue
+                    left_problem_masks[env] = side_masks[frame, 0]
+                    right_problem_masks[env] = side_masks[frame, 1]
+                if self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks["left"] is not None:
+                    source_rest_left_arm_neutral_reference_objective.set_problem_masks(left_problem_masks)
+                if self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks["right"] is not None:
+                    source_rest_right_arm_neutral_reference_objective.set_problem_masks(right_problem_masks)
+
+            if (
+                self.ai_sapiens_hand_hip_branch_reference_enabled
+                and self.ai_sapiens_hand_hip_branch_reference_weight > 0.0
+            ):
+                left_problem_masks = np.zeros((num_envs,), dtype=np.float32)
+                right_problem_masks = np.zeros((num_envs,), dtype=np.float32)
+                left_reference_q = np.asarray(default_joint_q, dtype=np.float32).copy()
+                right_reference_q = np.asarray(default_joint_q, dtype=np.float32).copy()
+                target_roll = np.deg2rad(
+                    max(0.0, float(self.ai_sapiens_hand_hip_branch_reference_target_roll_deg))
+                )
+                for env in range(num_envs):
+                    if env >= len(self.input_hand_hip_branch_reference_masks):
+                        continue
+                    side_masks = self.input_hand_hip_branch_reference_masks[env]
+                    if frame >= side_masks.shape[0]:
+                        continue
+                    left_problem_masks[env] = side_masks[frame, 0]
+                    right_problem_masks[env] = side_masks[frame, 1]
+                    for q_idx in self.ai_sapiens_hand_hip_branch_reference_q_indices["left"]:
+                        left_reference_q[env, int(q_idx)] = np.float32(target_roll)
+                    for q_idx in self.ai_sapiens_hand_hip_branch_reference_q_indices["right"]:
+                        right_reference_q[env, int(q_idx)] = np.float32(-target_roll)
+                if self.ai_sapiens_hand_hip_branch_reference_coord_masks["left"] is not None:
+                    hand_hip_left_branch_reference_objective.set_target(left_reference_q)
+                    hand_hip_left_branch_reference_objective.set_problem_masks(left_problem_masks)
+                if self.ai_sapiens_hand_hip_branch_reference_coord_masks["right"] is not None:
+                    hand_hip_right_branch_reference_objective.set_target(right_reference_q)
+                    hand_hip_right_branch_reference_objective.set_problem_masks(right_problem_masks)
 
             if self.ai_sapiens_arm_nullspace_temporal_reference_enabled:
                 active_nullspace_reference = frame > num_frames_to_remove
@@ -3111,34 +3536,23 @@ class NewtonPipeline:
                 )
             )
             if direct_body_chain_stage_active:
-                final_position_weights, final_rotation_weights = _snapshot_objective_weights()
-                _apply_direct_body_chain_stage_weights(
-                    self.ai_sapiens_direct_body_chain_stage1_position_scales,
-                    self.ai_sapiens_direct_body_chain_stage1_rotation_scales,
-                    self.ai_sapiens_direct_body_chain_stage1_default_position_scale,
-                    self.ai_sapiens_direct_body_chain_stage1_default_rotation_scale,
-                )
-                ik_solver.step(
-                    joint_q,
-                    joint_q,
-                    iterations=max(1, self.ai_sapiens_direct_body_chain_stage1_iterations),
-                )
-                if solver_trace_arrays is not None:
-                    solver_trace_arrays["q_after_direct_body_chain_stage1"][frame] = joint_q.numpy()
-                _apply_direct_body_chain_stage_weights(
-                    self.ai_sapiens_direct_body_chain_stage2_position_scales,
-                    self.ai_sapiens_direct_body_chain_stage2_rotation_scales,
-                    self.ai_sapiens_direct_body_chain_stage2_default_position_scale,
-                    self.ai_sapiens_direct_body_chain_stage2_default_rotation_scale,
-                )
-                ik_solver.step(
-                    joint_q,
-                    joint_q,
-                    iterations=max(1, self.ai_sapiens_direct_body_chain_stage2_iterations),
-                )
-                if solver_trace_arrays is not None:
-                    solver_trace_arrays["q_after_direct_body_chain_stage2"][frame] = joint_q.numpy()
-                _restore_objective_weights(final_position_weights, final_rotation_weights)
+                if direct_body_chain_graph_capture is not None:
+                    wp.capture_launch(direct_body_chain_graph_capture)
+                else:
+                    final_position_weights, final_rotation_weights = (
+                        direct_body_chain_restore_weights
+                        if direct_body_chain_static_weights
+                        else _snapshot_objective_weights()
+                    )
+                    _set_objective_weights(*direct_body_chain_stage1_weights)
+                    direct_body_chain_stage1_step()
+                    if solver_trace_arrays is not None:
+                        solver_trace_arrays["q_after_direct_body_chain_stage1"][frame] = joint_q.numpy()
+                    _set_objective_weights(*direct_body_chain_stage2_weights)
+                    direct_body_chain_stage2_step()
+                    if solver_trace_arrays is not None:
+                        solver_trace_arrays["q_after_direct_body_chain_stage2"][frame] = joint_q.numpy()
+                    _restore_objective_weights(final_position_weights, final_rotation_weights)
             elif graph_capture is not None:
                 wp.capture_launch(graph_capture)
             else:
@@ -3324,22 +3738,54 @@ class NewtonPipeline:
                 solver_trace_arrays["q_after_output_safety_margin"][frame] = data
 
             if self.ai_sapiens_output_joint_step_limit_specs:
+                current_pre_step_data = np.asarray(data, dtype=np.float32).copy()
+                for env in range(num_envs):
+                    if frame > (len(self.input_targets[env]) - 1):
+                        continue
+                    pre_step_q_data[env][frame] = current_pre_step_data[env]
                 previous_data = np.full_like(data, np.nan, dtype=np.float32)
+                previous_pre_step_data = np.full_like(data, np.nan, dtype=np.float32)
+                previous2_pre_step_data = np.full_like(data, np.nan, dtype=np.float32)
                 for env in range(num_envs):
                     if frame <= 0:
                         continue
                     if frame > (len(self.input_targets[env]) - 1):
                         continue
-                    if (
-                        self.reset_solver_state_at_output_start
-                        and num_frames_to_remove > 0
-                        and frame == num_frames_to_remove
-                    ):
+                    if num_frames_to_remove > 0 and frame == num_frames_to_remove:
                         continue
                     previous = joint_q_data[env][frame - 1]
                     if previous is not None:
                         previous_data[env] = np.asarray(previous, dtype=np.float32)
-                data = self._apply_ai_sapiens_output_joint_step_limit(data, previous_data)
+                    previous_pre_step = pre_step_q_data[env][frame - 1]
+                    if previous_pre_step is not None:
+                        previous_pre_step_data[env] = np.asarray(previous_pre_step, dtype=np.float32)
+                    if frame > 1:
+                        previous2_pre_step = pre_step_q_data[env][frame - 2]
+                        if previous2_pre_step is not None:
+                            previous2_pre_step_data[env] = np.asarray(previous2_pre_step, dtype=np.float32)
+                sample_rates = np.full((num_envs,), np.nan, dtype=np.float32)
+                for env in range(num_envs):
+                    if env < len(self.input_sample_rates):
+                        sample_rates[env] = np.float32(self.input_sample_rates[env])
+                if solver_trace_arrays is not None:
+                    data, effective_steps, adaptive_masks = self._apply_ai_sapiens_output_joint_step_limit(
+                        data,
+                        previous_data,
+                        sample_rates,
+                        previous_pre_step_data,
+                        previous2_pre_step_data,
+                        return_trace=True,
+                    )
+                    solver_trace_arrays["output_joint_step_limit_effective_steps_rad"][frame] = effective_steps
+                    solver_trace_arrays["output_joint_step_limit_adaptive_active_mask"][frame] = adaptive_masks
+                else:
+                    data = self._apply_ai_sapiens_output_joint_step_limit(
+                        data,
+                        previous_data,
+                        sample_rates,
+                        previous_pre_step_data,
+                        previous2_pre_step_data,
+                    )
 
             if solver_trace_arrays is not None:
                 solver_trace_arrays["q_after_output_joint_step_limit"][frame] = data
@@ -3418,6 +3864,9 @@ class NewtonPipeline:
                 **solver_trace_arrays,
                 "target_names": np.asarray(self.mapped_joints),
                 "joint_names": np.asarray(self._qpos_schema()),
+                "output_joint_step_limit_joint_names": np.asarray([
+                    str(spec["joint"]) for spec in self.ai_sapiens_output_joint_step_limit_specs
+                ]),
                 "frame_index_internal": np.arange(self.max_frames, dtype=np.int32),
                 "frame_index_output": np.arange(self.max_frames, dtype=np.int32) - int(num_frames_to_remove),
                 "num_frames_to_remove": np.asarray(num_frames_to_remove, dtype=np.int32),
@@ -3690,32 +4139,128 @@ class NewtonPipeline:
                 )
                 continue
             limit = limit_value
+            velocity_limit = 0.0
             if isinstance(limit_value, dict):
-                limit = limit_value.get("max_step_rad", 0.0)
+                if "max_velocity_rad_per_sec" in limit_value:
+                    velocity_limit = float(limit_value.get("max_velocity_rad_per_sec", 0.0))
+                elif "max_velocity_deg_per_sec" in limit_value:
+                    velocity_limit = np.deg2rad(float(limit_value.get("max_velocity_deg_per_sec", 0.0)))
+                if "max_step_rad" in limit_value:
+                    limit = limit_value.get("max_step_rad", 0.0)
+                elif "max_step_deg" in limit_value:
+                    limit = np.deg2rad(float(limit_value.get("max_step_deg", 0.0)))
+                else:
+                    limit = 0.0
             limit = max(0.0, float(limit))
-            if limit <= 0.0:
+            velocity_limit = max(0.0, float(velocity_limit))
+            if limit <= 0.0 and velocity_limit <= 0.0:
                 continue
             specs.append({
                 "joint": str(joint_name),
                 "q_index": int(qpos_schema.index(joint_name)),
                 "max_step_rad": float(limit),
+                "max_velocity_rad_per_sec": float(velocity_limit),
+                "adaptive_fast_velocity_rad_per_sec": float(
+                    self.ai_sapiens_adaptive_output_joint_step_fast_velocity_rad.get(str(joint_name), 0.0)
+                ),
             })
         return specs
 
-    def _apply_ai_sapiens_output_joint_step_limit(self, q_data, previous_q_data):
+    def _apply_ai_sapiens_output_joint_step_limit(
+        self,
+        q_data,
+        previous_q_data,
+        sample_rates=None,
+        previous_pre_step_q_data=None,
+        previous2_pre_step_q_data=None,
+        return_trace=False,
+    ):
         if not self.ai_sapiens_output_joint_step_limit_specs:
+            if return_trace:
+                empty_shape = (np.asarray(q_data).shape[0], 0)
+                return (
+                    q_data,
+                    np.empty(empty_shape, dtype=np.float32),
+                    np.empty(empty_shape, dtype=np.float32),
+                )
             return q_data
         out = np.asarray(q_data, dtype=np.float32).copy()
         previous = np.asarray(previous_q_data, dtype=np.float32)
-        for spec in self.ai_sapiens_output_joint_step_limit_specs:
+        sample_rates = (
+            np.asarray(sample_rates, dtype=np.float32)
+            if sample_rates is not None
+            else np.full((out.shape[0],), np.nan, dtype=np.float32)
+        )
+        previous_pre = (
+            np.asarray(previous_pre_step_q_data, dtype=np.float32)
+            if previous_pre_step_q_data is not None
+            else np.full_like(out, np.nan, dtype=np.float32)
+        )
+        previous2_pre = (
+            np.asarray(previous2_pre_step_q_data, dtype=np.float32)
+            if previous2_pre_step_q_data is not None
+            else np.full_like(out, np.nan, dtype=np.float32)
+        )
+        spec_count = len(self.ai_sapiens_output_joint_step_limit_specs)
+        effective_steps = np.full((out.shape[0], spec_count), np.nan, dtype=np.float32)
+        adaptive_masks = np.zeros((out.shape[0], spec_count), dtype=np.float32)
+        for spec_idx, spec in enumerate(self.ai_sapiens_output_joint_step_limit_specs):
             q_idx = int(spec["q_index"])
-            max_step = float(spec["max_step_rad"])
             prev = previous[:, q_idx]
             valid = np.isfinite(prev)
             if not np.any(valid):
                 continue
+            max_step = np.full((out.shape[0],), float(spec["max_step_rad"]), dtype=np.float32)
+            velocity_limit = float(spec.get("max_velocity_rad_per_sec", 0.0))
+            if velocity_limit > 0.0:
+                rate_valid = np.isfinite(sample_rates) & (sample_rates > 0.0)
+                velocity_steps = np.full_like(max_step, np.inf, dtype=np.float32)
+                velocity_steps[rate_valid] = np.float32(velocity_limit) / sample_rates[rate_valid]
+                if float(spec["max_step_rad"]) > 0.0:
+                    max_step = np.minimum(max_step, velocity_steps)
+                else:
+                    max_step = velocity_steps
+            if (
+                self.ai_sapiens_adaptive_output_joint_step_limit_enabled
+                and int(self.ai_sapiens_adaptive_output_joint_step_consistency_frames) >= 2
+            ):
+                fast_velocity_limit = float(spec.get("adaptive_fast_velocity_rad_per_sec", 0.0))
+                if fast_velocity_limit > 0.0:
+                    rate_valid = np.isfinite(sample_rates) & (sample_rates > 0.0)
+                    fast_steps = np.full_like(max_step, np.nan, dtype=np.float32)
+                    fast_steps[rate_valid] = np.float32(fast_velocity_limit) / sample_rates[rate_valid]
+                    current_pre = out[:, q_idx]
+                    prev_pre = previous_pre[:, q_idx]
+                    prev2_pre = previous2_pre[:, q_idx]
+                    current_pre_delta = current_pre - prev_pre
+                    previous_pre_delta = prev_pre - prev2_pre
+                    trigger_threshold = max_step * np.float32(
+                        self.ai_sapiens_adaptive_output_joint_step_trigger_ratio
+                    )
+                    adaptive_valid = (
+                        valid
+                        & rate_valid
+                        & np.isfinite(fast_steps)
+                        & (fast_steps > max_step)
+                        & np.isfinite(prev_pre)
+                        & np.isfinite(prev2_pre)
+                        & np.isfinite(current_pre_delta)
+                        & np.isfinite(previous_pre_delta)
+                        & (np.abs(current_pre_delta) > trigger_threshold)
+                        & (np.abs(previous_pre_delta) > trigger_threshold)
+                        & ((current_pre_delta * previous_pre_delta) > 0.0)
+                    )
+                    if np.any(adaptive_valid):
+                        max_step[adaptive_valid] = fast_steps[adaptive_valid]
+                        adaptive_masks[adaptive_valid, spec_idx] = 1.0
+            valid = valid & np.isfinite(max_step) & (max_step > 0.0)
+            if not np.any(valid):
+                continue
+            effective_steps[valid, spec_idx] = max_step[valid]
             delta = out[valid, q_idx] - prev[valid]
-            out[valid, q_idx] = prev[valid] + np.clip(delta, -max_step, max_step)
+            out[valid, q_idx] = prev[valid] + np.clip(delta, -max_step[valid], max_step[valid])
+        if return_trace:
+            return out, effective_steps, adaptive_masks
         return out
 
     @staticmethod
@@ -3814,6 +4359,27 @@ class NewtonPipeline:
             "hand_residual_guard_active": False,
         }
 
+    def _ai_sapiens_output_joint_step_limit_summary(self):
+        return {
+            "enabled": bool(self.ai_sapiens_output_joint_step_limit_enabled),
+            "joint_count": int(len(self.ai_sapiens_output_joint_step_limit_specs)),
+            "joints": [
+                {
+                    "joint": spec["joint"],
+                    "q_index": int(spec["q_index"]),
+                    "max_step_rad": float(spec.get("max_step_rad", 0.0)),
+                    "max_velocity_rad_per_sec": float(spec.get("max_velocity_rad_per_sec", 0.0)),
+                    "adaptive_fast_velocity_rad_per_sec": float(
+                        spec.get("adaptive_fast_velocity_rad_per_sec", 0.0)
+                    ),
+                }
+                for spec in self.ai_sapiens_output_joint_step_limit_specs
+            ],
+            "adaptive_enabled": bool(self.ai_sapiens_adaptive_output_joint_step_limit_enabled),
+            "adaptive_trigger_ratio": float(self.ai_sapiens_adaptive_output_joint_step_trigger_ratio),
+            "adaptive_consistency_frames": int(self.ai_sapiens_adaptive_output_joint_step_consistency_frames),
+        }
+
     def _ai_sapiens_output_joint_safety_margin_summary(self):
         return {
             "enabled": bool(self.ai_sapiens_output_joint_safety_margin_enabled),
@@ -3830,6 +4396,158 @@ class NewtonPipeline:
             ],
         }
 
+    def _compute_ai_sapiens_source_rest_arm_neutral_reference_masks(self, targets):
+        frames = int(targets.shape[0])
+        masks = np.zeros((frames, 2), dtype=np.float32)
+        trace = np.full((frames, 2, 6), np.nan, dtype=np.float32)
+        if (
+            not self.ai_sapiens_source_rest_arm_neutral_reference_enabled
+            or self.ai_sapiens_source_rest_arm_neutral_reference_weight <= 0.0
+        ):
+            return masks, trace
+
+        target_to_idx = {name: idx for idx, name in enumerate(self.mapped_joints)}
+        chest_idx = target_to_idx.get("Chest")
+        if chest_idx is None or frames <= 0:
+            return masks, trace
+
+        threshold = max(
+            1.0e-6,
+            float(self.ai_sapiens_source_rest_arm_neutral_reference_distance_threshold_m),
+        )
+        full_weight_distance = max(
+            0.0,
+            min(
+                threshold - 1.0e-6,
+                float(self.ai_sapiens_source_rest_arm_neutral_reference_full_weight_distance_m),
+            ),
+        )
+        start_frame = (
+            int(self.num_initialization_frames + self.num_stabilization_frames)
+            if self.ai_sapiens_source_rest_arm_neutral_reference_start_after_warmup
+            else 0
+        )
+        start_frame = max(0, min(frames, start_frame))
+        rest_frame = 0
+        side_specs = [
+            ("left", target_to_idx.get("LeftArm"), target_to_idx.get("LeftForeArm"), target_to_idx.get("LeftHand")),
+            ("right", target_to_idx.get("RightArm"), target_to_idx.get("RightForeArm"), target_to_idx.get("RightHand")),
+        ]
+
+        def _chest_local_positions(frame_idx, indices):
+            chest_pos = np.asarray(targets[frame_idx, chest_idx, 0:3], dtype=np.float64)
+            chest_quat = self._normalize_quat_np_xyzw(targets[frame_idx, chest_idx, 3:7])
+            inv_chest_quat = self._quat_conjugate_np_xyzw(chest_quat)
+            local = []
+            for target_idx in indices:
+                pos = np.asarray(targets[frame_idx, target_idx, 0:3], dtype=np.float64)
+                local.append(self._quat_rotate_np_xyzw(inv_chest_quat, pos - chest_pos))
+            return np.asarray(local, dtype=np.float64)
+
+        for side_idx, (_side_name, arm_idx, forearm_idx, hand_idx) in enumerate(side_specs):
+            if arm_idx is None or forearm_idx is None or hand_idx is None:
+                continue
+            indices = (arm_idx, forearm_idx, hand_idx)
+            rest_local = _chest_local_positions(rest_frame, indices)
+            raw_masks = np.zeros((frames,), dtype=np.float64)
+            for frame in range(frames):
+                local = _chest_local_positions(frame, indices)
+                error = float(np.sqrt(np.mean(np.sum((local - rest_local) ** 2, axis=1))))
+                if frame < start_frame or error >= threshold:
+                    weight_scale = 0.0
+                elif error <= full_weight_distance:
+                    weight_scale = 1.0
+                else:
+                    denom = max(1.0e-6, threshold - full_weight_distance)
+                    weight_scale = (threshold - error) / denom
+                raw_masks[frame] = float(np.clip(weight_scale, 0.0, 1.0))
+                trace[frame, side_idx, 0] = np.float32(error)
+                trace[frame, side_idx, 1] = np.float32(weight_scale)
+                trace[frame, side_idx, 2] = np.float32(threshold)
+                trace[frame, side_idx, 3] = np.float32(full_weight_distance)
+                trace[frame, side_idx, 4] = np.float32(1.0 if frame >= start_frame else 0.0)
+            window = max(1, int(self.ai_sapiens_source_rest_arm_neutral_reference_smooth_window))
+            if window > 1:
+                kernel = np.ones(window, dtype=np.float64) / float(window)
+                smoothed = np.convolve(raw_masks, kernel, mode="same")
+                smoothed[:start_frame] = 0.0
+                raw_masks = smoothed
+            masks[:, side_idx] = np.clip(raw_masks, 0.0, 1.0).astype(np.float32)
+            trace[:, side_idx, 5] = masks[:, side_idx]
+
+        return masks, trace
+
+    def _compute_ai_sapiens_hand_hip_branch_reference_masks(self, targets):
+        frames = int(targets.shape[0])
+        masks = np.zeros((frames, 2), dtype=np.float32)
+        trace = np.full((frames, 2, 8), np.nan, dtype=np.float32)
+        if (
+            not self.ai_sapiens_hand_hip_branch_reference_enabled
+            or self.ai_sapiens_hand_hip_branch_reference_weight <= 0.0
+        ):
+            return masks, trace
+
+        target_to_idx = {name: idx for idx, name in enumerate(self.mapped_joints)}
+        pelvis_idx = target_to_idx.get("Hips")
+        left_leg_idx = target_to_idx.get("LeftLeg")
+        right_leg_idx = target_to_idx.get("RightLeg")
+        if pelvis_idx is None or left_leg_idx is None or right_leg_idx is None or frames <= 0:
+            return masks, trace
+
+        detect = max(1.0e-6, float(self.ai_sapiens_hand_hip_branch_reference_detect_m))
+        full_weight = max(
+            0.0,
+            min(detect - 1.0e-6, float(self.ai_sapiens_hand_hip_branch_reference_full_weight_m)),
+        )
+        max_hand_z_rel = float(self.ai_sapiens_hand_hip_branch_reference_max_hand_z_rel_m)
+        start_frame = (
+            int(self.num_initialization_frames + self.num_stabilization_frames)
+            if self.ai_sapiens_hand_hip_branch_reference_start_after_warmup
+            else 0
+        )
+        start_frame = max(0, min(frames, start_frame))
+        side_specs = [
+            ("left", target_to_idx.get("LeftHand"), left_leg_idx),
+            ("right", target_to_idx.get("RightHand"), right_leg_idx),
+        ]
+        denom = max(1.0e-6, detect - full_weight)
+
+        for side_idx, (_side_name, hand_idx, hip_idx) in enumerate(side_specs):
+            if hand_idx is None or hip_idx is None:
+                continue
+            raw_masks = np.zeros((frames,), dtype=np.float64)
+            for frame in range(frames):
+                hand = np.asarray(targets[frame, hand_idx, 0:3], dtype=np.float64)
+                pelvis = np.asarray(targets[frame, pelvis_idx, 0:3], dtype=np.float64)
+                hip = np.asarray(targets[frame, hip_idx, 0:3], dtype=np.float64)
+                distance = self._point_to_segment_distance_np(hand, pelvis, hip)
+                hand_z_rel = float(hand[2] - pelvis[2])
+                close_score = float(np.clip((detect - distance) / denom, 0.0, 1.0))
+                if distance <= full_weight:
+                    close_score = 1.0
+                vertical_score = 1.0 if hand_z_rel <= max_hand_z_rel else 0.0
+                weight_scale = close_score * vertical_score
+                if frame < start_frame:
+                    weight_scale = 0.0
+                raw_masks[frame] = weight_scale
+                trace[frame, side_idx, 0] = np.float32(distance)
+                trace[frame, side_idx, 1] = np.float32(hand_z_rel)
+                trace[frame, side_idx, 2] = np.float32(close_score)
+                trace[frame, side_idx, 3] = np.float32(vertical_score)
+                trace[frame, side_idx, 4] = np.float32(weight_scale)
+                trace[frame, side_idx, 5] = np.float32(detect)
+                trace[frame, side_idx, 6] = np.float32(full_weight)
+            window = max(1, int(self.ai_sapiens_hand_hip_branch_reference_smooth_window))
+            if window > 1:
+                kernel = np.ones((window,), dtype=np.float64) / float(window)
+                smoothed = np.convolve(raw_masks, kernel, mode="same")
+                smoothed[:start_frame] = 0.0
+                raw_masks = smoothed
+            masks[:, side_idx] = np.clip(raw_masks, 0.0, 1.0).astype(np.float32)
+            trace[:, side_idx, 7] = masks[:, side_idx]
+
+        return masks, trace
+
     def _apply_ai_sapiens_hand_hip_target_clearance(self, targets):
         summary = {
             "enabled": True,
@@ -3841,8 +4559,10 @@ class NewtonPipeline:
             "margin_m": float(self.ai_sapiens_hand_hip_clearance_margin_m),
             "gain": float(self.ai_sapiens_hand_hip_clearance_gain),
             "max_shift_m": float(self.ai_sapiens_hand_hip_clearance_max_shift_m),
+            "max_shift_step_m": float(self.ai_sapiens_hand_hip_clearance_max_shift_step_m),
             "smooth_window": int(self.ai_sapiens_hand_hip_clearance_smooth_window),
             "ramp_output_frames": int(self.ai_sapiens_hand_hip_clearance_ramp_output_frames),
+            "chain_weights": dict(self.ai_sapiens_hand_hip_clearance_chain_weights or {}),
             "hand_count": 0,
             "applied_frame_count": 0,
             "guarded_candidate_frame_count": 0,
@@ -3915,7 +4635,9 @@ class NewtonPipeline:
         margin = max(0.0, float(self.ai_sapiens_hand_hip_clearance_margin_m))
         gain = max(0.0, float(self.ai_sapiens_hand_hip_clearance_gain))
         max_shift = max(0.0, float(self.ai_sapiens_hand_hip_clearance_max_shift_m))
+        max_shift_step = max(0.0, float(self.ai_sapiens_hand_hip_clearance_max_shift_step_m))
         ramp_frames = max(0, int(self.ai_sapiens_hand_hip_clearance_ramp_output_frames))
+        chain_weights_config = self.ai_sapiens_hand_hip_clearance_chain_weights or {}
         guarded_mode = self.ai_sapiens_hand_hip_clearance_mode in {
             "guarded_pelvis_local_same_side_hip_capsule",
             "guarded_pelvis_local_radial_corridor",
@@ -3951,9 +4673,33 @@ class NewtonPipeline:
         total_guarded_downscaled = 0
         total_guarded_canceled = 0
         all_applied_same_gains = []
+        all_clearance_target_indices = set()
         per_frame_applied_counts = np.zeros((corrected.shape[0],), dtype=np.int32)
         per_frame_same_gains = [[] for _ in range(corrected.shape[0])]
         for hand_name, hand_idx, hip_idx, side_sign in hand_specs:
+            side_name = "Left" if hand_name.startswith("Left") else "Right"
+            chain_target_specs = []
+            for role, target_name, default_weight in (
+                ("hand", f"{side_name}Hand", 1.0),
+                ("forearm", f"{side_name}ForeArm", 0.0),
+                ("arm", f"{side_name}Arm", 0.0),
+            ):
+                target_idx = target_to_idx.get(target_name)
+                if target_idx is None:
+                    continue
+                weight = float(
+                    chain_weights_config.get(
+                        target_name,
+                        chain_weights_config.get(role, default_weight),
+                    )
+                )
+                if weight <= 0.0:
+                    continue
+                chain_target_specs.append((role, target_name, int(target_idx), max(0.0, weight)))
+                all_clearance_target_indices.add(int(target_idx))
+            if not chain_target_specs:
+                chain_target_specs = [("hand", hand_name, int(hand_idx), 1.0)]
+                all_clearance_target_indices.add(int(hand_idx))
             opposite_hip_idx = right_leg_idx if hip_idx == left_leg_idx else left_leg_idx
             raw_shifts = np.zeros((corrected.shape[0], 3), dtype=np.float64)
             before_distances = []
@@ -4019,6 +4765,19 @@ class NewtonPipeline:
                 shifts = smoothed
             else:
                 shifts = raw_shifts
+            if max_shift_step > 0.0:
+                shifts[:start_frame] = 0.0
+                for frame in range(start_frame + 1, corrected.shape[0]):
+                    delta = shifts[frame] - shifts[frame - 1]
+                    delta_norm = float(np.linalg.norm(delta))
+                    if delta_norm > max_shift_step:
+                        shifts[frame] = shifts[frame - 1] + delta * (max_shift_step / delta_norm)
+                for frame in range(corrected.shape[0] - 2, start_frame - 1, -1):
+                    delta = shifts[frame] - shifts[frame + 1]
+                    delta_norm = float(np.linalg.norm(delta))
+                    if delta_norm > max_shift_step:
+                        shifts[frame] = shifts[frame + 1] + delta * (max_shift_step / delta_norm)
+                shifts[:start_frame] = 0.0
 
             sparse_removed_count = 0
             sparse_cap = float(self.ai_sapiens_sparse_corridor_active_ratio_cap)
@@ -4096,9 +4855,11 @@ class NewtonPipeline:
                     applied_same_gains.append(float(same_after_for_gain - same_before_for_gain))
                     per_frame_applied_counts[frame] += 1
                     per_frame_same_gains[frame].append(float(same_after_for_gain - same_before_for_gain))
-                    corrected[frame, hand_idx, 0:3] = (
-                        np.asarray(corrected[frame, hand_idx, 0:3], dtype=np.float64) + shift
-                    ).astype(np.float32)
+                    for _role, _target_name, chain_target_idx, chain_weight in chain_target_specs:
+                        corrected[frame, chain_target_idx, 0:3] = (
+                            np.asarray(corrected[frame, chain_target_idx, 0:3], dtype=np.float64)
+                            + shift * float(chain_weight)
+                        ).astype(np.float32)
                     total_applied += 1
                 hand_after = np.asarray(corrected[frame, hand_idx, 0:3], dtype=np.float64)
                 pelvis = np.asarray(corrected[frame, pelvis_idx, 0:3], dtype=np.float64)
@@ -4129,6 +4890,10 @@ class NewtonPipeline:
                 "guarded_candidate_frame_count": int(guarded_candidate_count),
                 "guarded_downscale_frame_count": int(guarded_downscale_count),
                 "guarded_cancel_frame_count": int(guarded_cancel_count),
+                "chain_targets": [
+                    {"role": role, "target": target_name, "weight": float(weight)}
+                    for role, target_name, _target_idx, weight in chain_target_specs
+                ],
                 "shift_p95_m": self._safe_percentile(shift_norms, 95),
                 "shift_max_m": float(np.max(shift_norms)) if shift_norms else float("nan"),
                 "applied_same_gain_p50_m": self._safe_percentile(applied_same_gains, 50),
@@ -4139,7 +4904,9 @@ class NewtonPipeline:
         if window_guard_enabled:
             accepted_windows = 0
             rolled_back_windows = 0
-            hand_indices = [spec[1] for spec in hand_specs if spec[1] is not None]
+            target_indices = sorted(all_clearance_target_indices)
+            if not target_indices:
+                target_indices = [spec[1] for spec in hand_specs if spec[1] is not None]
             for w_start in range(start_frame, corrected.shape[0], window_guard_stride):
                 w_end = min(corrected.shape[0], w_start + window_guard_size)
                 if w_end <= w_start:
@@ -4161,8 +4928,10 @@ class NewtonPipeline:
                     accepted_windows += 1
                 else:
                     rolled_back_windows += 1
-                    for hand_idx in hand_indices:
-                        corrected[w_start:w_end, hand_idx, 0:3] = original_corrected[w_start:w_end, hand_idx, 0:3]
+                    for target_idx in target_indices:
+                        corrected[w_start:w_end, target_idx, 0:3] = (
+                            original_corrected[w_start:w_end, target_idx, 0:3]
+                        )
             summary["window_guard_accepted_count"] = int(accepted_windows)
             summary["window_guard_rolled_back_count"] = int(rolled_back_windows)
             total_applied = 0
@@ -4924,9 +5693,9 @@ class NewtonPipeline:
                     "targets": ["LeftArm", "LeftForeArm", "LeftHand"],
                     "source_joints": ["LeftArm", "LeftForeArm", "LeftHand"],
                     "bodies": [
-                        "left_shoulder_roll_g1_proxy",
-                        "left_elbow_g1_proxy",
-                        "left_wrist_yaw_g1_proxy",
+                        "left_shoulder_roll_proxy",
+                        "left_elbow_proxy",
+                        "left_wrist_yaw_proxy",
                     ],
                     "anchor": "root",
                 },
@@ -4935,9 +5704,9 @@ class NewtonPipeline:
                     "targets": ["RightArm", "RightForeArm", "RightHand"],
                     "source_joints": ["RightArm", "RightForeArm", "RightHand"],
                     "bodies": [
-                        "right_shoulder_roll_g1_proxy",
-                        "right_elbow_g1_proxy",
-                        "right_wrist_yaw_g1_proxy",
+                        "right_shoulder_roll_proxy",
+                        "right_elbow_proxy",
+                        "right_wrist_yaw_proxy",
                     ],
                     "anchor": "root",
                 },
@@ -5473,10 +6242,10 @@ class NewtonPipeline:
                     "targets": ["LeftArm", "LeftForeArm", "LeftHand"],
                     "source_joints": ["LeftArm", "LeftForeArm", "LeftHand"],
                     "bodies": [
-                        "chest_g1_torso_proxy",
-                        "left_shoulder_roll_g1_proxy",
-                        "left_elbow_g1_proxy",
-                        "left_wrist_yaw_g1_proxy",
+                        "chest_torso_proxy",
+                        "left_shoulder_roll_proxy",
+                        "left_elbow_proxy",
+                        "left_wrist_yaw_proxy",
                     ],
                 },
                 {
@@ -5485,10 +6254,10 @@ class NewtonPipeline:
                     "targets": ["RightArm", "RightForeArm", "RightHand"],
                     "source_joints": ["RightArm", "RightForeArm", "RightHand"],
                     "bodies": [
-                        "chest_g1_torso_proxy",
-                        "right_shoulder_roll_g1_proxy",
-                        "right_elbow_g1_proxy",
-                        "right_wrist_yaw_g1_proxy",
+                        "chest_torso_proxy",
+                        "right_shoulder_roll_proxy",
+                        "right_elbow_proxy",
+                        "right_wrist_yaw_proxy",
                     ],
                 },
             ]
@@ -6168,17 +6937,17 @@ class NewtonPipeline:
                 {
                     "targets": ["LeftArm", "LeftForeArm", "LeftHand"],
                     "bodies": [
-                        "left_shoulder_roll_g1_proxy",
-                        "left_elbow_g1_proxy",
-                        "left_wrist_yaw_g1_proxy",
+                        "left_shoulder_roll_proxy",
+                        "left_elbow_proxy",
+                        "left_wrist_yaw_proxy",
                     ],
                 },
                 {
                     "targets": ["RightArm", "RightForeArm", "RightHand"],
                     "bodies": [
-                        "right_shoulder_roll_g1_proxy",
-                        "right_elbow_g1_proxy",
-                        "right_wrist_yaw_g1_proxy",
+                        "right_shoulder_roll_proxy",
+                        "right_elbow_proxy",
+                        "right_wrist_yaw_proxy",
                     ],
                 },
             ]
@@ -6237,17 +7006,17 @@ class NewtonPipeline:
                     {
                         "targets": ["LeftArm", "LeftForeArm", "LeftHand"],
                         "bodies": [
-                            "left_shoulder_roll_g1_proxy",
-                            "left_elbow_g1_proxy",
-                            "left_wrist_yaw_g1_proxy",
+                            "left_shoulder_roll_proxy",
+                            "left_elbow_proxy",
+                            "left_wrist_yaw_proxy",
                         ],
                     },
                     {
                         "targets": ["RightArm", "RightForeArm", "RightHand"],
                         "bodies": [
-                            "right_shoulder_roll_g1_proxy",
-                            "right_elbow_g1_proxy",
-                            "right_wrist_yaw_g1_proxy",
+                            "right_shoulder_roll_proxy",
+                            "right_elbow_proxy",
+                            "right_wrist_yaw_proxy",
                         ],
                     },
                 ])
@@ -6292,17 +7061,17 @@ class NewtonPipeline:
                     {
                         "targets": ["LeftArm", "LeftForeArm", "LeftHand"],
                         "bodies": [
-                            "left_shoulder_roll_g1_proxy",
-                            "left_elbow_g1_proxy",
-                            "left_wrist_yaw_g1_proxy",
+                            "left_shoulder_roll_proxy",
+                            "left_elbow_proxy",
+                            "left_wrist_yaw_proxy",
                         ],
                     },
                     {
                         "targets": ["RightArm", "RightForeArm", "RightHand"],
                         "bodies": [
-                            "right_shoulder_roll_g1_proxy",
-                            "right_elbow_g1_proxy",
-                            "right_wrist_yaw_g1_proxy",
+                            "right_shoulder_roll_proxy",
+                            "right_elbow_proxy",
+                            "right_wrist_yaw_proxy",
                         ],
                     },
                 ])
@@ -6347,17 +7116,17 @@ class NewtonPipeline:
                     {
                         "targets": ["LeftArm", "LeftForeArm", "LeftHand"],
                         "bodies": [
-                            "left_shoulder_roll_g1_proxy",
-                            "left_elbow_g1_proxy",
-                            "left_wrist_yaw_g1_proxy",
+                            "left_shoulder_roll_proxy",
+                            "left_elbow_proxy",
+                            "left_wrist_yaw_proxy",
                         ],
                     },
                     {
                         "targets": ["RightArm", "RightForeArm", "RightHand"],
                         "bodies": [
-                            "right_shoulder_roll_g1_proxy",
-                            "right_elbow_g1_proxy",
-                            "right_wrist_yaw_g1_proxy",
+                            "right_shoulder_roll_proxy",
+                            "right_elbow_proxy",
+                            "right_wrist_yaw_proxy",
                         ],
                     },
                 ])
@@ -6402,18 +7171,18 @@ class NewtonPipeline:
                     {
                         "targets": ["LeftArm", "LeftForeArm", "LeftHand"],
                         "bodies": [
-                            "left_shoulder_roll_g1_proxy",
-                            "left_elbow_g1_proxy",
-                            "left_wrist_yaw_g1_proxy",
+                            "left_shoulder_roll_proxy",
+                            "left_elbow_proxy",
+                            "left_wrist_yaw_proxy",
                         ],
                         "torso": "Chest",
                     },
                     {
                         "targets": ["RightArm", "RightForeArm", "RightHand"],
                         "bodies": [
-                            "right_shoulder_roll_g1_proxy",
-                            "right_elbow_g1_proxy",
-                            "right_wrist_yaw_g1_proxy",
+                            "right_shoulder_roll_proxy",
+                            "right_elbow_proxy",
+                            "right_wrist_yaw_proxy",
                         ],
                         "torso": "Chest",
                     },
@@ -8231,6 +9000,26 @@ class NewtonPipeline:
         target_name_to_idx = {name: idx for idx, name in enumerate(self.mapped_joints)}
         specs = [
             {
+                "name": "left_hand_tcp_to_pelvis_left_hip",
+                "side": "left",
+                "point_body": "left_hand_tcp",
+                "segment_a_body": "pelvis",
+                "segment_b_body": "left_hip_roll_link",
+                "point_target": "LeftHand",
+                "segment_a_target": "Hips",
+                "segment_b_target": "LeftLeg",
+            },
+            {
+                "name": "left_hand_tcp_to_pelvis_torso_centerline",
+                "side": "left",
+                "point_body": "left_hand_tcp",
+                "segment_a_body": "pelvis",
+                "segment_b_body": "torso_link",
+                "point_target": "LeftHand",
+                "segment_a_target": "Hips",
+                "segment_b_target": "Chest",
+            },
+            {
                 "name": "left_wrist_to_pelvis_left_hip",
                 "side": "left",
                 "point_body": "left_wrist_roll_rubber_hand",
@@ -8239,6 +9028,16 @@ class NewtonPipeline:
                 "point_target": "LeftHand",
                 "segment_a_target": "Hips",
                 "segment_b_target": "LeftLeg",
+            },
+            {
+                "name": "left_wrist_to_pelvis_torso_centerline",
+                "side": "left",
+                "point_body": "left_wrist_roll_rubber_hand",
+                "segment_a_body": "pelvis",
+                "segment_b_body": "torso_link",
+                "point_target": "LeftHand",
+                "segment_a_target": "Hips",
+                "segment_b_target": "Chest",
             },
             {
                 "name": "left_elbow_to_pelvis_left_hip",
@@ -8251,6 +9050,26 @@ class NewtonPipeline:
                 "segment_b_target": "LeftLeg",
             },
             {
+                "name": "right_hand_tcp_to_pelvis_right_hip",
+                "side": "right",
+                "point_body": "right_hand_tcp",
+                "segment_a_body": "pelvis",
+                "segment_b_body": "right_hip_roll_link",
+                "point_target": "RightHand",
+                "segment_a_target": "Hips",
+                "segment_b_target": "RightLeg",
+            },
+            {
+                "name": "right_hand_tcp_to_pelvis_torso_centerline",
+                "side": "right",
+                "point_body": "right_hand_tcp",
+                "segment_a_body": "pelvis",
+                "segment_b_body": "torso_link",
+                "point_target": "RightHand",
+                "segment_a_target": "Hips",
+                "segment_b_target": "Chest",
+            },
+            {
                 "name": "right_wrist_to_pelvis_right_hip",
                 "side": "right",
                 "point_body": "right_wrist_roll_rubber_hand",
@@ -8259,6 +9078,16 @@ class NewtonPipeline:
                 "point_target": "RightHand",
                 "segment_a_target": "Hips",
                 "segment_b_target": "RightLeg",
+            },
+            {
+                "name": "right_wrist_to_pelvis_torso_centerline",
+                "side": "right",
+                "point_body": "right_wrist_roll_rubber_hand",
+                "segment_a_body": "pelvis",
+                "segment_b_body": "torso_link",
+                "point_target": "RightHand",
+                "segment_a_target": "Hips",
+                "segment_b_target": "Chest",
             },
             {
                 "name": "right_elbow_to_pelvis_right_hip",
@@ -8272,6 +9101,7 @@ class NewtonPipeline:
             },
         ]
         data = []
+        pair_clearances = self.ai_sapiens_capsule_proxy_barrier_pair_clearance_m or {}
         for spec in specs:
             body_keys = ("point_body", "segment_a_body", "segment_b_body")
             target_keys = ("point_target", "segment_a_target", "segment_b_target")
@@ -8279,8 +9109,18 @@ class NewtonPipeline:
                 continue
             if not all(spec[key] in target_name_to_idx for key in target_keys):
                 continue
+            clearance_m = float(
+                pair_clearances.get(
+                    spec["name"],
+                    pair_clearances.get(
+                        spec["point_body"],
+                        self.ai_sapiens_capsule_proxy_barrier_clearance_m,
+                    ),
+                )
+            )
             data.append({
                 **spec,
+                "clearance_m": clearance_m,
                 "point_body_idx": int(body_name_to_idx[spec["point_body"]]),
                 "segment_a_body_idx": int(body_name_to_idx[spec["segment_a_body"]]),
                 "segment_b_body_idx": int(body_name_to_idx[spec["segment_b_body"]]),
@@ -8300,8 +9140,10 @@ class NewtonPipeline:
             "enabled": bool(self.ai_sapiens_capsule_proxy_barrier_enabled),
             "pair_count": int(pair_count),
             "weight": float(self.ai_sapiens_capsule_proxy_barrier_weight),
-            "clearance_m": float(self.ai_sapiens_capsule_proxy_barrier_clearance_m),
+            "default_clearance_m": float(self.ai_sapiens_capsule_proxy_barrier_clearance_m),
             "risk_distance_m": float(self.ai_sapiens_capsule_proxy_barrier_risk_distance_m),
+            "always_active": bool(self.ai_sapiens_capsule_proxy_barrier_always_active),
+            "mask_smooth_window": int(self.ai_sapiens_capsule_proxy_barrier_mask_smooth_window),
             "pairs": [],
             "skipped": False,
             "skip_reason": None,
@@ -8320,20 +9162,30 @@ class NewtonPipeline:
         for pair_idx, pair in enumerate(self.ai_sapiens_capsule_proxy_barrier_data):
             distances = []
             active_count = 0
+            clearance_m = float(pair.get("clearance_m", self.ai_sapiens_capsule_proxy_barrier_clearance_m))
             for frame in range(frames):
                 p = raw[frame, int(pair["point_target_idx"]), 0:3]
                 a = raw[frame, int(pair["segment_a_target_idx"]), 0:3]
                 b = raw[frame, int(pair["segment_b_target_idx"]), 0:3]
                 distance = self._point_to_segment_distance_np(p, a, b)
-                active = bool(frame >= int(start_frame) and distance <= risk_distance_m)
-                if active:
-                    active_masks[frame, pair_idx] = np.float32(1.0)
+                active_value = 0.0
+                if frame >= int(start_frame):
+                    if self.ai_sapiens_capsule_proxy_barrier_always_active:
+                        active_value = 1.0
+                    elif risk_distance_m <= clearance_m + 1.0e-6:
+                        active_value = 1.0 if distance <= risk_distance_m else 0.0
+                    elif distance < risk_distance_m:
+                        x = (risk_distance_m - distance) / (risk_distance_m - clearance_m)
+                        x = float(np.clip(x, 0.0, 1.0))
+                        active_value = x * x * (3.0 - 2.0 * x)
+                if active_value > 0.0:
+                    active_masks[frame, pair_idx] = np.float32(active_value)
                     active_count += 1
                 distances.append(distance)
                 trace[frame, pair_idx, 0] = np.float32(distance)
-                trace[frame, pair_idx, 1] = np.float32(1.0 if active else 0.0)
+                trace[frame, pair_idx, 1] = np.float32(active_value)
                 trace[frame, pair_idx, 2] = np.float32(risk_distance_m)
-                trace[frame, pair_idx, 3] = np.float32(self.ai_sapiens_capsule_proxy_barrier_clearance_m)
+                trace[frame, pair_idx, 3] = np.float32(clearance_m)
                 trace[frame, pair_idx, 4] = np.float32(pair_idx)
             summary["pairs"].append({
                 "name": str(pair["name"]),
@@ -8341,10 +9193,24 @@ class NewtonPipeline:
                 "point_body": str(pair["point_body"]),
                 "segment_a_body": str(pair["segment_a_body"]),
                 "segment_b_body": str(pair["segment_b_body"]),
+                "clearance_m": clearance_m,
                 "active_frames": int(active_count),
                 "distance_p05_m": self._safe_percentile(distances, 5),
                 "distance_min_m": float(np.min(distances)) if distances else float("nan"),
             })
+        smooth_window = max(1, int(self.ai_sapiens_capsule_proxy_barrier_mask_smooth_window))
+        if smooth_window > 1 and pair_count > 0:
+            kernel = np.ones((smooth_window,), dtype=np.float64) / float(smooth_window)
+            for pair_idx in range(pair_count):
+                smoothed = np.convolve(active_masks[:, pair_idx].astype(np.float64), kernel, mode="same")
+                active_masks[:, pair_idx] = np.clip(smoothed, 0.0, 1.0).astype(np.float32)
+                trace[:, pair_idx, 1] = active_masks[:, pair_idx]
+                if pair_idx < len(summary["pairs"]):
+                    summary["pairs"][pair_idx]["active_frames"] = int(np.count_nonzero(active_masks[:, pair_idx] > 1.0e-6))
+                    summary["pairs"][pair_idx]["mask_p95"] = self._safe_percentile(active_masks[:, pair_idx], 95)
+                    summary["pairs"][pair_idx]["mask_max"] = (
+                        float(np.max(active_masks[:, pair_idx])) if active_masks.shape[0] else float("nan")
+                    )
         return active_masks, trace, summary
 
     def _compute_ai_sapiens_risk_window_objective_scales(self, targets):
@@ -8677,30 +9543,60 @@ class NewtonPipeline:
             joint_limit_lower=self.ik_model.joint_limit_lower,
             joint_limit_upper=self.ik_model.joint_limit_upper,
             weight=0.0,
-            coord_masks=self.smooth_joint_filter_coord_masks)
+            coord_masks=self.smooth_joint_filter_coord_masks,
+            reference_coord_masks=self.smooth_joint_filter_reference_coord_masks)
 
         neutral_reference_objective = IKTemporalJointReference(
             joint_coord_count=self.ik_model.joint_coord_count,
+            joint_dof_count=self.ik_model.joint_dof_count,
             weight=self.neutral_reference_weight,
             coord_masks=self.neutral_reference_coord_masks)
 
         temporal_yaw_twist_reference_objective = IKTemporalJointReference(
             joint_coord_count=self.ik_model.joint_coord_count,
+            joint_dof_count=self.ik_model.joint_dof_count,
             weight=self.ai_sapiens_temporal_yaw_twist_reference_weight,
             coord_masks=self.ai_sapiens_temporal_yaw_twist_reference_coord_masks)
 
         arm_ik_temporal_reference_objective = IKTemporalJointReference(
             joint_coord_count=self.ik_model.joint_coord_count,
+            joint_dof_count=self.ik_model.joint_dof_count,
             weight=self.ai_sapiens_arm_ik_temporal_reference_weight,
             coord_masks=self.ai_sapiens_arm_ik_temporal_reference_coord_masks)
 
+        source_rest_left_arm_neutral_reference_objective = IKTemporalJointReference(
+            joint_coord_count=self.ik_model.joint_coord_count,
+            joint_dof_count=self.ik_model.joint_dof_count,
+            weight=self.ai_sapiens_source_rest_arm_neutral_reference_weight,
+            coord_masks=self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks["left"])
+
+        source_rest_right_arm_neutral_reference_objective = IKTemporalJointReference(
+            joint_coord_count=self.ik_model.joint_coord_count,
+            joint_dof_count=self.ik_model.joint_dof_count,
+            weight=self.ai_sapiens_source_rest_arm_neutral_reference_weight,
+            coord_masks=self.ai_sapiens_source_rest_arm_neutral_reference_coord_masks["right"])
+
+        hand_hip_left_branch_reference_objective = IKTemporalJointReference(
+            joint_coord_count=self.ik_model.joint_coord_count,
+            joint_dof_count=self.ik_model.joint_dof_count,
+            weight=self.ai_sapiens_hand_hip_branch_reference_weight,
+            coord_masks=self.ai_sapiens_hand_hip_branch_reference_coord_masks["left"])
+
+        hand_hip_right_branch_reference_objective = IKTemporalJointReference(
+            joint_coord_count=self.ik_model.joint_coord_count,
+            joint_dof_count=self.ik_model.joint_dof_count,
+            weight=self.ai_sapiens_hand_hip_branch_reference_weight,
+            coord_masks=self.ai_sapiens_hand_hip_branch_reference_coord_masks["right"])
+
         wrist_roll_nullspace_temporal_objective = IKTemporalJointReference(
             joint_coord_count=self.ik_model.joint_coord_count,
+            joint_dof_count=self.ik_model.joint_dof_count,
             weight=self.ai_sapiens_wrist_roll_temporal_weight_base,
             coord_masks=self.ai_sapiens_wrist_roll_nullspace_coord_masks)
 
         arm_branch_nullspace_temporal_objective = IKTemporalJointReference(
             joint_coord_count=self.ik_model.joint_coord_count,
+            joint_dof_count=self.ik_model.joint_dof_count,
             weight=self.ai_sapiens_arm_branch_temporal_weight_base,
             coord_masks=self.ai_sapiens_arm_branch_nullspace_coord_masks)
 
@@ -8873,7 +9769,10 @@ class NewtonPipeline:
                 [int(pair["segment_a_body_idx"]) for pair in self.ai_sapiens_capsule_proxy_barrier_data],
                 [int(pair["segment_b_body_idx"]) for pair in self.ai_sapiens_capsule_proxy_barrier_data],
                 num_envs,
-                clearance_m=self.ai_sapiens_capsule_proxy_barrier_clearance_m,
+                clearance_m=[
+                    float(pair.get("clearance_m", self.ai_sapiens_capsule_proxy_barrier_clearance_m))
+                    for pair in self.ai_sapiens_capsule_proxy_barrier_data
+                ],
                 weight=self.ai_sapiens_capsule_proxy_barrier_weight,
             )
 
@@ -8885,6 +9784,10 @@ class NewtonPipeline:
             neutral_reference_objective,
             temporal_yaw_twist_reference_objective,
             arm_ik_temporal_reference_objective,
+            source_rest_left_arm_neutral_reference_objective,
+            source_rest_right_arm_neutral_reference_objective,
+            hand_hip_left_branch_reference_objective,
+            hand_hip_right_branch_reference_objective,
             wrist_roll_nullspace_temporal_objective,
             arm_branch_nullspace_temporal_objective,
             elbow_branch_hint_objectives,
