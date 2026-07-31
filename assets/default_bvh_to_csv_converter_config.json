@@ -5,5 +5,9 @@
 	"retargeter": "Newton",
 	"retarget_source": "soma",
 	"retarget_target": "unitree_g1",
-	"retarget_source_facing_direction": "Mujoco"
+	"retarget_source_facing_direction": "Mujoco",
+	"kimodo_npz_template_bvh": "assets/motions/bvh/Neutral_walk_forward_002__A057.bvh",
+	"kimodo_npz_offsets": "",
+	"kimodo_npz_position_scale": 100.0,
+	"kimodo_npz_compare": false
 }

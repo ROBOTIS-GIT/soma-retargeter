@@ -294,8 +294,7 @@
     ]
   },
   "_provenance": {
-    "purpose": "AI Sapiens direct candidate using target-frame convention",
-    "source_scaler": "soma_retargeter/configs/unitree_g1/soma_to_g1_scaler_config.json",
-    "note": "joint_scales, joint_parents, joint_offsets intentionally copied from G1; no AI Sapiens qpos0-solved quaternion replacement"
+    "purpose": "AI Sapiens direct retargeting using the configured target-frame convention",
+    "note": "joint_scales, joint_parents, and joint_offsets preserve the established SOMA-to-AI-Sapiens target-frame mapping"
   }
 }

@@ -15,6 +15,7 @@ import soma_retargeter.utils.math_utils as math_utils
 import soma_retargeter.assets.bvh as bvh_utils
 import soma_retargeter.assets.csv as csv_utils
 import soma_retargeter.assets.ai_sapiens as ai_sapiens_assets
+import soma_retargeter.assets.kimodo_npz as kimodo_npz_utils
 import soma_retargeter.utils.io_utils as io_utils
 import soma_retargeter.pipelines.utils as pipeline_utils
 
@@ -283,6 +284,8 @@ class Viewer:
         self.skeleton = None
         self.skeleton_renderer = None
         self.skeletal_mesh_renderer = None
+        self.loaded_npz_path = None
+        self.loaded_npz_converted_bvh_path = None
 
         self.animation_offsets = []
         self.animation_buffers = []
@@ -319,6 +322,61 @@ class Viewer:
         self.skeletal_mesh = pipeline_utils.get_source_model_mesh(pipeline_utils.SourceType.SOMA, self.skeleton)
         self.skeletal_mesh_renderer = SkeletalMeshRenderer(self.skeletal_mesh)
         self.compute_playback_total_time()
+
+    def load_npz_file(self, path):
+        npz_path = pathlib.Path(path).expanduser()
+        output_bvh = kimodo_npz_utils.temp_bvh_path_for_npz(npz_path)
+        offsets = (
+            os.environ.get("SOMA_RETARGETER_KIMODO_NPZ_OFFSETS")
+            or self.config.get("kimodo_npz_offsets")
+        )
+        template_bvh = (
+            os.environ.get("SOMA_RETARGETER_KIMODO_NPZ_TEMPLATE_BVH")
+            or self.config.get("kimodo_npz_template_bvh")
+        )
+        fps = (
+            float(os.environ["SOMA_RETARGETER_KIMODO_NPZ_FPS"])
+            if os.environ.get("SOMA_RETARGETER_KIMODO_NPZ_FPS") is not None
+            else self.config.get("kimodo_npz_fps")
+        )
+        if fps is None:
+            fps = kimodo_npz_utils.detect_sidecar_bvh_fps(npz_path)
+        if fps is None:
+            fps = 30.0
+        position_scale = _float_config_or_env(
+            self.config,
+            "kimodo_npz_position_scale",
+            "SOMA_RETARGETER_KIMODO_NPZ_POSITION_SCALE",
+            100.0,
+        )
+        compare = _bool_config_or_env(
+            self.config,
+            "kimodo_npz_compare",
+            "SOMA_RETARGETER_KIMODO_NPZ_COMPARE",
+            False,
+        )
+        result = kimodo_npz_utils.convert_npz_to_bvh(
+            npz_path,
+            output_bvh,
+            template_bvh=template_bvh,
+            offsets=offsets,
+            fps=fps,
+            position_scale=position_scale,
+            compare=compare,
+        )
+        self.loaded_npz_path = npz_path
+        self.loaded_npz_converted_bvh_path = pathlib.Path(result["output_bvh"])
+        print(
+            f"[INFO]: Converted NPZ [{npz_path}] to fixed BVH "
+            f"[{self.loaded_npz_converted_bvh_path}] "
+            f"frames={result['frames']} fps={result['fps']:.6g}")
+        if compare:
+            print(
+                "[INFO]: NPZ Euler round-trip error deg "
+                f"max={result['euler_roundtrip_error_max_deg']:.6g} "
+                f"p99={result['euler_roundtrip_error_p99_deg']:.6g} "
+                f"mean={result['euler_roundtrip_error_mean_deg']:.6g}")
+        self.load_bvh_file(str(self.loaded_npz_converted_bvh_path))
 
     def compute_playback_total_time(self):
         bvh_max_time = 0.0
@@ -483,7 +541,7 @@ class Viewer:
         
         viewport = ui.get_main_viewport()
 
-        panel_size = ui.ImVec2(320, 320)
+        panel_size = ui.ImVec2(320, 350)
         ui.set_next_window_pos(
             ui.ImVec2(
                 viewport.size.x - _UI_NEWTON_PANEL_MARGIN - panel_size.x,
@@ -522,6 +580,38 @@ class Viewer:
             if ui.button("Retarget"):
                 self.retarget_motion()
             
+            if (len(self.animation_buffers) == 0):
+                ui.end_disabled()
+
+            ui.align_text_to_frame_padding()
+            ui.text("NPZ Motion:")
+            ui.same_line()
+
+            ui.push_id(150)
+            if ui.button("Load"):
+                root = tk.Tk()
+                root.withdraw()
+                npz_path = tk_filedialog.askopenfilename(
+                    title='Load Kimodo NPZ File',
+                    defaultextension=".npz",
+                    filetypes=[('NPZ files', '*.npz')])
+
+                if npz_path:
+                    try:
+                        self.load_npz_file(npz_path)
+                    except Exception as exc:
+                        print(f"[ERROR]: Failed to load NPZ motion [{npz_path}]: {exc}")
+            ui.pop_id()
+
+            if (len(self.animation_buffers) == 0):
+                ui.begin_disabled()
+
+            ui.same_line()
+            ui.push_id(151)
+            if ui.button("Retarget"):
+                self.retarget_motion()
+            ui.pop_id()
+
             if (len(self.animation_buffers) == 0):
                 ui.end_disabled()
 

@@ -409,9 +409,8 @@ def _restore_visual_mesh_geoms(
         body = _find_body(root, visual["body"])
         geom_pose: dict[str, str] = {}
         if body is None:
-            # Fixed-joint links (e.g. head_link) are fused into the parent by
-            # MuJoCo's URDF compiler. Place the geom on the surviving parent with
-            # the composed fixed-joint + visual origin.
+            # Fixed-joint links such as head_link are fused into the parent by
+            # MuJoCo's URDF compiler. Place the geom on the surviving parent.
             placement = _resolve_fused_body_placement(visual["body"], root, fixed_origins)
             if placement is None:
                 print(
