@@ -6,7 +6,11 @@ import newton
 
 import json
 import pathlib
+import subprocess
+import sys
+import threading
 import time
+from collections import deque
 import warp as wp
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -16,6 +20,7 @@ import soma_retargeter.assets.bvh as bvh_utils
 import soma_retargeter.assets.csv as csv_utils
 import soma_retargeter.assets.ai_sapiens as ai_sapiens_assets
 import soma_retargeter.assets.kimodo_npz as kimodo_npz_utils
+import soma_retargeter.assets.smplx_motion as smplx_motion_utils
 import soma_retargeter.utils.io_utils as io_utils
 import soma_retargeter.pipelines.utils as pipeline_utils
 
@@ -286,6 +291,15 @@ class Viewer:
         self.skeletal_mesh_renderer = None
         self.loaded_npz_path = None
         self.loaded_npz_converted_bvh_path = None
+        self.loaded_motion_kind = None
+        self.soma_x_model_path = None
+        self.soma_x_model_info = None
+        self.soma_x_motion_path = None
+        self.soma_x_process = None
+        self.soma_x_reader_thread = None
+        self.soma_x_output_path = None
+        self.soma_x_retarget_ready = False
+        self.soma_x_log_lines = deque(maxlen=30)
 
         self.animation_offsets = []
         self.animation_buffers = []
@@ -293,6 +307,7 @@ class Viewer:
         self.robot_csv_animation_buffers = [None for _ in range(self.num_robots)]
 
     def gui(self, ui):
+        self._poll_soma_x_process()
         self.ui_playback_controls(ui)
         self.ui_scene_options(ui)
 
@@ -303,7 +318,7 @@ class Viewer:
                 self.retarget_target_options[self.retarget_target_idx]))
         self.compute_playback_total_time()
 
-    def load_bvh_file(self, path):
+    def load_bvh_file(self, path, *, motion_kind="bvh"):
         self.animation_buffers = []
         self.skeleton_instances = []
         if self.skeleton_renderer is not None:
@@ -321,9 +336,10 @@ class Viewer:
 
         self.skeletal_mesh = pipeline_utils.get_source_model_mesh(pipeline_utils.SourceType.SOMA, self.skeleton)
         self.skeletal_mesh_renderer = SkeletalMeshRenderer(self.skeletal_mesh)
+        self.loaded_motion_kind = motion_kind
         self.compute_playback_total_time()
 
-    def load_npz_file(self, path):
+    def load_npz_file(self, path, *, motion_kind="npz"):
         npz_path = pathlib.Path(path).expanduser()
         output_bvh = kimodo_npz_utils.temp_bvh_path_for_npz(npz_path)
         offsets = (
@@ -339,6 +355,8 @@ class Viewer:
             if os.environ.get("SOMA_RETARGETER_KIMODO_NPZ_FPS") is not None
             else self.config.get("kimodo_npz_fps")
         )
+        if fps is None:
+            fps = kimodo_npz_utils.detect_npz_fps(npz_path)
         if fps is None:
             fps = kimodo_npz_utils.detect_sidecar_bvh_fps(npz_path)
         if fps is None:
@@ -376,7 +394,301 @@ class Viewer:
                 f"max={result['euler_roundtrip_error_max_deg']:.6g} "
                 f"p99={result['euler_roundtrip_error_p99_deg']:.6g} "
                 f"mean={result['euler_roundtrip_error_mean_deg']:.6g}")
-        self.load_bvh_file(str(self.loaded_npz_converted_bvh_path))
+        self.load_bvh_file(
+            str(self.loaded_npz_converted_bvh_path),
+            motion_kind=motion_kind,
+        )
+
+    def _show_gui_error(self, title, message):
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            messagebox.showerror(title, message, parent=root)
+        finally:
+            root.destroy()
+
+    def _soma_x_conversion_options(self):
+        return {
+            "device_name": _str_config_or_env(
+                self.config,
+                "soma_x_device",
+                "SOMA_RETARGETER_SOMA_X_DEVICE",
+                "auto",
+            ),
+            "batch_size": int(
+                _float_config_or_env(
+                    self.config,
+                    "soma_x_batch_size",
+                    "SOMA_RETARGETER_SOMA_X_BATCH_SIZE",
+                    32,
+                )
+            ),
+            "body_iters": 2,
+            "finger_iters": 1,
+            "full_iters": 1,
+            "lie_iters": 3,
+            "lie_lambda": 1e-1,
+            "autograd_iters": 0,
+            "autograd_lr": 5e-3,
+            "flat_hand_mean": True,
+            "fps_override": None,
+            "source_coordinate": _str_config_or_env(
+                self.config,
+                "soma_x_source_coordinate",
+                "SOMA_RETARGETER_SOMA_X_SOURCE_COORDINATE",
+                "auto",
+            ),
+            "canonicalize_heading": _bool_config_or_env(
+                self.config,
+                "soma_x_canonicalize_heading",
+                "SOMA_RETARGETER_SOMA_X_CANONICALIZE_HEADING",
+                True,
+            ),
+            "heading_yaw_degrees": 0.0,
+            "rebase_root_horizontal": _bool_config_or_env(
+                self.config,
+                "soma_x_rebase_root_horizontal",
+                "SOMA_RETARGETER_SOMA_X_REBASE_ROOT_HORIZONTAL",
+                True,
+            ),
+        }
+
+    def _invalidate_soma_x_motion(self):
+        self.soma_x_motion_path = None
+        self.soma_x_output_path = None
+        self.soma_x_retarget_ready = False
+        if getattr(self, "loaded_motion_kind", None) != "soma_x":
+            return
+        for renderer_name in (
+            "skeleton_renderer",
+            "skeletal_mesh_renderer",
+            "coordinate_renderer",
+        ):
+            renderer = getattr(self, renderer_name, None)
+            if renderer is not None and hasattr(renderer, "clear"):
+                renderer.clear(self.viewer)
+        self.animation_buffers = []
+        self.skeleton_instances = []
+        self.loaded_motion_kind = None
+        self.skeleton = None
+
+    def set_soma_x_model(self, path):
+        model = pathlib.Path(path).expanduser().resolve()
+        info = smplx_motion_utils.validate_human_model(model)
+        self._invalidate_soma_x_motion()
+        self.soma_x_model_path = model
+        self.soma_x_model_info = info
+        return info
+
+    def _select_soma_x_model(self):
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            selected = filedialog.askopenfilename(
+                title="Select licensed SMPL-family human model",
+                defaultextension=".npz",
+                filetypes=[
+                    ("SMPL-family model", "*.npz *.pkl"),
+                    ("NPZ model", "*.npz"),
+                    ("Pickle model", "*.pkl"),
+                ],
+                parent=root,
+            )
+        finally:
+            root.destroy()
+        if not selected:
+            return None
+        return pathlib.Path(selected).expanduser().resolve()
+
+    def choose_soma_x_model(self):
+        try:
+            selected = self._select_soma_x_model()
+            if selected is not None:
+                self.set_soma_x_model(selected)
+        except Exception as exc:
+            self._show_gui_error("SOMA-X human model error", str(exc))
+
+    def choose_soma_x_motion(self):
+        import tkinter as tk
+        from tkinter import filedialog
+
+        if self.soma_x_model_info is None or self.soma_x_process is not None:
+            return
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            selected = filedialog.askopenfilename(
+                title="Load raw SMPL-family motion",
+                defaultextension=".npz",
+                filetypes=[("NPZ motion", "*.npz")],
+                parent=root,
+            )
+        finally:
+            root.destroy()
+        if selected:
+            self.start_soma_x_conversion(selected)
+
+    def _soma_x_controls_enabled(self):
+        converting = self.soma_x_process is not None
+        return {
+            "human_model": not converting,
+            "motion": not converting and self.soma_x_model_info is not None,
+            "retarget": not converting and self.soma_x_retarget_ready,
+        }
+
+    def _soma_x_model_label(self):
+        if self.soma_x_model_info is None:
+            return ""
+        return self.soma_x_model_info.display_name
+
+    def start_soma_x_conversion(self, path):
+        if self.soma_x_process is not None:
+            return
+        if self.soma_x_model_info is None or self.soma_x_model_path is None:
+            self._show_gui_error(
+                "SOMA-X human model required",
+                "Select a licensed SMPL-family human model first.",
+            )
+            return
+        self.soma_x_motion_path = pathlib.Path(path).expanduser().resolve()
+        self.soma_x_output_path = None
+        self.soma_x_retarget_ready = False
+        status = smplx_motion_utils.probe_soma_x_dependencies()
+        if not status.available:
+            self._show_gui_error(
+                "SOMA-X is not installed",
+                f"{status.reason}\n\nInstall with:\n"
+                f"{smplx_motion_utils.soma_x_install_command()}",
+            )
+            return
+
+        try:
+            source = pathlib.Path(path).expanduser().resolve()
+            if not source.is_file():
+                raise FileNotFoundError(source)
+            model = self.soma_x_model_path
+            options = self._soma_x_conversion_options()
+            options["model_type"] = self.soma_x_model_info.model_type
+            output = smplx_motion_utils.temp_retarget_npz_path_for_smpl(
+                source,
+                model,
+                options,
+            )
+            repo_root = pathlib.Path(__file__).resolve().parents[1]
+            command = [
+                sys.executable,
+                str(repo_root / "tools/convert_smpl_to_retarget_npz.py"),
+                "--input",
+                str(source),
+                "--output",
+                str(output),
+                "--model",
+                str(model),
+                "--model-type",
+                self.soma_x_model_info.model_type,
+                "--device",
+                str(options["device_name"]),
+                "--batch-size",
+                str(options["batch_size"]),
+                "--source-coordinate",
+                str(options["source_coordinate"]),
+                (
+                    "--canonicalize-heading"
+                    if options["canonicalize_heading"]
+                    else "--no-canonicalize-heading"
+                ),
+                (
+                    "--rebase-root-horizontal"
+                    if options["rebase_root_horizontal"]
+                    else "--no-rebase-root-horizontal"
+                ),
+            ]
+            environment = os.environ.copy()
+            python_path = environment.get("PYTHONPATH")
+            environment["PYTHONPATH"] = (
+                str(repo_root)
+                if not python_path
+                else f"{repo_root}{os.pathsep}{python_path}"
+            )
+            self.soma_x_motion_path = source
+            self.soma_x_output_path = output
+            self.soma_x_retarget_ready = False
+            self.soma_x_log_lines.clear()
+            self.soma_x_process = subprocess.Popen(
+                command,
+                cwd=repo_root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            self.soma_x_reader_thread = threading.Thread(
+                target=self._read_soma_x_process_output,
+                daemon=True,
+            )
+            self.soma_x_reader_thread.start()
+        except Exception as exc:
+            self.soma_x_process = None
+            self.soma_x_retarget_ready = False
+            self._show_gui_error("SOMA-X conversion error", str(exc))
+
+    def _read_soma_x_process_output(self):
+        process = self.soma_x_process
+        if process is None or process.stdout is None:
+            return
+        for line in process.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            print(line, flush=True)
+            self.soma_x_log_lines.append(line)
+
+    def _poll_soma_x_process(self):
+        process = self.soma_x_process
+        if process is None:
+            return
+        return_code = process.poll()
+        if return_code is None:
+            return
+        if self.soma_x_reader_thread is not None:
+            self.soma_x_reader_thread.join(timeout=0.2)
+        self.soma_x_process = None
+        if return_code == 0:
+            try:
+                self.load_npz_file(
+                    self.soma_x_output_path,
+                    motion_kind="soma_x",
+                )
+                self.soma_x_retarget_ready = True
+            except Exception as exc:
+                self.soma_x_retarget_ready = False
+                self._show_gui_error("SOMA-X load error", str(exc))
+            return
+        self.soma_x_retarget_ready = False
+        details = "\n".join(self.soma_x_log_lines)
+        self._show_gui_error(
+            "SOMA-X conversion failed",
+            details or f"Converter exited with status {return_code}",
+        )
+
+    def _stop_soma_x_process(self):
+        process = self.soma_x_process
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5.0)
+        self.soma_x_process = None
 
     def compute_playback_total_time(self):
         bvh_max_time = 0.0
@@ -471,13 +783,15 @@ class Viewer:
         self.viewer.end_frame()
 
     def run(self):
-        while self.viewer.is_running():
-            with wp.ScopedTimer("step", active=False):
-                self.step()
-            with wp.ScopedTimer("render", active=False):
-                self.render()
-
-        self.viewer.close()
+        try:
+            while self.viewer.is_running():
+                with wp.ScopedTimer("step", active=False):
+                    self.step()
+                with wp.ScopedTimer("render", active=False):
+                    self.render()
+        finally:
+            self._stop_soma_x_process()
+            self.viewer.close()
 
     def retarget_motion(self):
         retarget_source = self.retarget_source_options[self.retarget_source_idx]
@@ -541,7 +855,7 @@ class Viewer:
         
         viewport = ui.get_main_viewport()
 
-        panel_size = ui.ImVec2(320, 350)
+        panel_size = ui.ImVec2(320, 420)
         ui.set_next_window_pos(
             ui.ImVec2(
                 viewport.size.x - _UI_NEWTON_PANEL_MARGIN - panel_size.x,
@@ -573,14 +887,20 @@ class Viewer:
                     self.load_bvh_file(bvh_path)
             ui.pop_id()
 
-            if (len(self.animation_buffers) == 0):
+            if (
+                len(self.animation_buffers) == 0
+                or self.loaded_motion_kind != "bvh"
+            ):
                 ui.begin_disabled()
 
             ui.same_line()
             if ui.button("Retarget"):
                 self.retarget_motion()
             
-            if (len(self.animation_buffers) == 0):
+            if (
+                len(self.animation_buffers) == 0
+                or self.loaded_motion_kind != "bvh"
+            ):
                 ui.end_disabled()
 
             ui.align_text_to_frame_padding()
@@ -603,7 +923,10 @@ class Viewer:
                         print(f"[ERROR]: Failed to load NPZ motion [{npz_path}]: {exc}")
             ui.pop_id()
 
-            if (len(self.animation_buffers) == 0):
+            if (
+                len(self.animation_buffers) == 0
+                or self.loaded_motion_kind != "npz"
+            ):
                 ui.begin_disabled()
 
             ui.same_line()
@@ -612,8 +935,50 @@ class Viewer:
                 self.retarget_motion()
             ui.pop_id()
 
-            if (len(self.animation_buffers) == 0):
+            if (
+                len(self.animation_buffers) == 0
+                or self.loaded_motion_kind != "npz"
+            ):
                 ui.end_disabled()
+
+            ui.align_text_to_frame_padding()
+            ui.text("SOMA-X:")
+            ui.same_line()
+
+            soma_x_controls = self._soma_x_controls_enabled()
+            ui.push_id(175)
+            if not soma_x_controls["human_model"]:
+                ui.begin_disabled()
+            if ui.button("Human Model"):
+                self.choose_soma_x_model()
+            if not soma_x_controls["human_model"]:
+                ui.end_disabled()
+            ui.pop_id()
+
+            ui.same_line()
+            ui.push_id(176)
+            if not soma_x_controls["motion"]:
+                ui.begin_disabled()
+            if ui.button("Motion"):
+                self.choose_soma_x_motion()
+            if not soma_x_controls["motion"]:
+                ui.end_disabled()
+            ui.pop_id()
+
+            ui.same_line()
+            ui.push_id(177)
+            if not soma_x_controls["retarget"]:
+                ui.begin_disabled()
+            if ui.button("Retarget"):
+                self.retarget_motion()
+            if not soma_x_controls["retarget"]:
+                ui.end_disabled()
+            ui.pop_id()
+
+            soma_x_model_label = self._soma_x_model_label()
+            if soma_x_model_label:
+                ui.same_line()
+                ui.text(soma_x_model_label)
 
             ui.align_text_to_frame_padding()
             ui.text("CSV Motion:")

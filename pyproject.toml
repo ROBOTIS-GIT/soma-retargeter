@@ -23,6 +23,9 @@ dependencies = [
     "tqdm==4.67.3",
 ]
 
+[project.optional-dependencies]
+soma-x = ["py-soma-x[smpl]==0.2.1"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["soma_retargeter*"]

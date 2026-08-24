@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import hashlib
+import math
+import os
 import tempfile
 import zipfile
 from pathlib import Path
@@ -151,24 +153,24 @@ def temp_bvh_path_for_npz(npz_path: str | Path) -> Path:
 
 def load_npz_motion(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     path = Path(path).expanduser()
-    data = np.load(path)
-    if "local_rot_mats" not in data:
-        raise ValueError(f"{path} does not contain local_rot_mats")
+    with np.load(path, allow_pickle=False) as data:
+        if "local_rot_mats" not in data:
+            raise ValueError(f"{path} does not contain local_rot_mats")
 
-    local_rot_mats = np.asarray(data["local_rot_mats"], dtype=np.float64)
-    if local_rot_mats.ndim == 5:
-        if local_rot_mats.shape[0] != 1:
-            raise ValueError(f"local_rot_mats batch dimension must be 1, got {local_rot_mats.shape[0]}")
-        local_rot_mats = local_rot_mats[0]
-    if local_rot_mats.shape[1:] != (77, 3, 3):
-        raise ValueError(f"local_rot_mats must have shape (T, 77, 3, 3), got {local_rot_mats.shape}")
+        local_rot_mats = np.asarray(data["local_rot_mats"], dtype=np.float64)
+        if local_rot_mats.ndim == 5:
+            if local_rot_mats.shape[0] != 1:
+                raise ValueError(f"local_rot_mats batch dimension must be 1, got {local_rot_mats.shape[0]}")
+            local_rot_mats = local_rot_mats[0]
+        if local_rot_mats.shape[1:] != (77, 3, 3):
+            raise ValueError(f"local_rot_mats must have shape (T, 77, 3, 3), got {local_rot_mats.shape}")
 
-    if "root_positions" in data:
-        root_positions = np.asarray(data["root_positions"], dtype=np.float64)
-    elif "posed_joints" in data:
-        root_positions = np.asarray(data["posed_joints"], dtype=np.float64)[:, 0]
-    else:
-        raise ValueError(f"{path} does not contain root_positions or posed_joints")
+        if "root_positions" in data:
+            root_positions = np.asarray(data["root_positions"], dtype=np.float64)
+        elif "posed_joints" in data:
+            root_positions = np.asarray(data["posed_joints"], dtype=np.float64)[:, 0]
+        else:
+            raise ValueError(f"{path} does not contain root_positions or posed_joints")
 
     if root_positions.ndim == 3:
         if root_positions.shape[0] != 1:
@@ -179,6 +181,31 @@ def load_npz_motion(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
             f"root_positions must have shape ({local_rot_mats.shape[0]}, 3), got {root_positions.shape}"
         )
     return local_rot_mats, root_positions
+
+
+def detect_npz_fps(path: str | Path) -> float | None:
+    """Return valid frame-rate metadata from a SOMA/SMPL-X NPZ file."""
+
+    fps_keys = (
+        "fps",
+        "sample_rate",
+        "mocap_frame_rate",
+        "mocap_framerate",
+        "frame_rate",
+        "framerate",
+        "source_fps",
+    )
+    with np.load(Path(path).expanduser(), allow_pickle=False) as data:
+        for key in fps_keys:
+            if key not in data.files:
+                continue
+            value = np.asarray(data[key])
+            if value.size != 1:
+                continue
+            fps = float(value.reshape(-1)[0])
+            if math.isfinite(fps) and fps > 0.0:
+                return fps
+    return None
 
 
 def _load_torch_float_storage_zip(path: Path) -> np.ndarray:
@@ -317,7 +344,13 @@ def write_bvh(
         out.append(" ".join(f"{value:.6f}" for value in values))
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text("\n".join(out) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def compare_euler_roundtrip(target_rot_mats: np.ndarray, eulers_zyx_deg: np.ndarray) -> tuple[float, float, float]:
