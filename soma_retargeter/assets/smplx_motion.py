@@ -144,13 +144,13 @@ def probe_soma_x_dependencies() -> SomaXDependencyStatus:
     try:
         version = importlib.metadata.version("py-soma-x")
     except importlib.metadata.PackageNotFoundError:
-        return SomaXDependencyStatus(False, None, "py-soma-x is not installed")
+        return SomaXDependencyStatus(False, None, "soma-x is not installed")
 
     if version != SOMA_X_REQUIRED_VERSION:
         return SomaXDependencyStatus(
             False,
             version,
-            f"py-soma-x {version} is installed; required version is {SOMA_X_REQUIRED_VERSION}",
+            f"soma-x {version} is installed; required version is {SOMA_X_REQUIRED_VERSION}",
         )
 
     missing = []

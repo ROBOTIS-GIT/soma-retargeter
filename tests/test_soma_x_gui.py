@@ -55,7 +55,7 @@ class SomaXGuiProcessTests(unittest.TestCase):
         viewer.skeleton_instances = []
         return viewer
 
-    def test_missing_optional_runtime_reports_install_command(self) -> None:
+    def test_missing_optional_runtime_reports_unavailable_reason(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source = root / "motion_stageii.npz"
@@ -71,22 +71,17 @@ class SomaXGuiProcessTests(unittest.TestCase):
                     return_value=SomaXDependencyStatus(
                         False,
                         None,
-                        "py-soma-x is not installed",
+                        "soma-x is not installed",
                     ),
-                ),
-                patch(
-                    "app.bvh_to_csv_converter.smplx_motion_utils.soma_x_install_command",
-                    return_value="python -m pip install -e '.[soma-x]'",
                 ),
                 patch("app.bvh_to_csv_converter.subprocess.Popen") as popen,
             ):
                 viewer.start_soma_x_conversion(source)
 
             popen.assert_not_called()
-            viewer._show_gui_error.assert_called_once()
-            self.assertIn(
-                "python -m pip install -e '.[soma-x]'",
-                viewer._show_gui_error.call_args.args[1],
+            viewer._show_gui_error.assert_called_once_with(
+                "SOMA-X is unavailable",
+                "soma-x is not installed",
             )
             self.assertIsNone(viewer.soma_x_process)
             self.assertFalse(viewer.soma_x_dependency_status.available)
@@ -248,7 +243,7 @@ class SomaXGuiProcessTests(unittest.TestCase):
         viewer.soma_x_dependency_status = SomaXDependencyStatus(
             False,
             None,
-            "py-soma-x is not installed",
+            "soma-x is not installed",
         )
 
         self.assertEqual(
@@ -256,27 +251,22 @@ class SomaXGuiProcessTests(unittest.TestCase):
             {"human_model": False, "motion": False, "retarget": False},
         )
 
-    def test_draws_unavailable_runtime_and_install_command_in_red(self) -> None:
+    def test_draws_unavailable_runtime_in_red(self) -> None:
         viewer = self.make_viewer(Path("/models/SMPLX_NEUTRAL.npz"))
         viewer.soma_x_dependency_status = SomaXDependencyStatus(
             False,
             None,
-            "py-soma-x is not installed",
+            "soma-x is not installed",
         )
         ui = Mock()
         color = ui.ImVec4.return_value
 
-        with patch(
-            "app.bvh_to_csv_converter.smplx_motion_utils.soma_x_install_command",
-            return_value="python -m pip install -e '.[soma-x]'",
-        ):
-            viewer._draw_soma_x_model_info(ui)
+        viewer._draw_soma_x_model_info(ui)
 
         ui.ImVec4.assert_called_once_with(1.0, 0.2, 0.2, 1.0)
         ui.text_colored.assert_called_once_with(
             color,
-            "SOMA-X is unavailable: py-soma-x is not installed\n"
-            "Install with: python -m pip install -e '.[soma-x]'",
+            "SOMA-X is unavailable: soma-x is not installed",
         )
         ui.set_tooltip.assert_not_called()
 

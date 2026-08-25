@@ -580,10 +580,7 @@ class Viewer:
         status = getattr(self, "soma_x_dependency_status", None)
         if status is None or status.available:
             return ""
-        return (
-            f"SOMA-X is unavailable: {status.reason}\n"
-            f"Install with: {smplx_motion_utils.soma_x_install_command()}"
-        )
+        return f"SOMA-X is unavailable: {status.reason}"
 
     def _soma_x_model_label(self):
         if self.soma_x_model_info is None:
@@ -694,8 +691,7 @@ class Viewer:
         if not status.available:
             self._show_gui_error(
                 "SOMA-X is unavailable",
-                f"{status.reason}\n\nInstall with:\n"
-                f"{smplx_motion_utils.soma_x_install_command()}",
+                status.reason,
             )
             return
 

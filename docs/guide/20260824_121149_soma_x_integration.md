@@ -38,6 +38,27 @@ obtained and used under its own license. Supported source model families are
 Male, female, and neutral model files are supported, but the selected file is
 authoritative and is never replaced silently from motion gender metadata.
 
+### License boundary
+
+- Soma Retargeter, `py-soma-x`, and the SOMA-X runtime assets are published
+  under Apache-2.0.
+- The `soma-x` extra installs `smplx` for SMPL-family identity support. The
+  `smplx` software is subject to the Max Planck non-commercial scientific
+  research license unless the user has obtained another applicable license.
+- SMPL, SMPL-H, and SMPL-X identity model files have separate license terms.
+  They are supplied by the user and are never bundled in this repository,
+  source distribution, or wheel.
+- The packaged `standard_t_pose_global_offsets_rots.p` is an unmodified asset
+  from [Kimodo](https://github.com/nv-tlabs/kimodo). Its Apache-2.0 license and
+  source attribution are shipped in `licenses/`.
+
+Official references:
+
+- [SOMA-X license](https://github.com/NVlabs/SOMA-X/blob/main/LICENSE)
+- [SOMA-X installation and model-file notice](https://github.com/NVlabs/SOMA-X#installation)
+- [SMPL-X software license](https://github.com/vchoutas/smplx/blob/main/LICENSE)
+- [Kimodo license](https://github.com/nv-tlabs/kimodo/blob/main/LICENSE)
+
 Model path precedence is:
 
 1. Unified CLI `--human-model`, standalone CLI `--model`, or the model selected
@@ -74,8 +95,8 @@ SOMA-X: [Human Model] [Motion] [Retarget]
    the line directly below the button row displays
    `Supported models: SMPL / SMPL-H / SMPL-X`. When SOMA-X is missing, has the
    wrong version, or lacks a required module, all three buttons are disabled.
-   The same information line displays the reason and the `.[soma-x]` editable
-   install command in red. Restart the GUI after installing the runtime.
+   The same information line displays the reason in red. Restart the GUI after
+   installing the runtime.
 2. Select a licensed SMPL, SMPL-H, or SMPL-X model. The information line then
    displays the detected family and filename in a smaller normal-foreground
    font, for example `SMPL-X | SMPLX_NEUTRAL.npz`. Hover over the line to see

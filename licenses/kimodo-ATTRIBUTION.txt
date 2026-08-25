@@ -1,0 +1,13 @@
+Kimodo SOMA77 rest-pose offsets asset
+
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+Upstream project: https://github.com/nv-tlabs/kimodo
+Source snapshot: 6bb58488037dd65360ff0c5d1692b403a23309f7
+First introduced: 032b4fc2ec32716f512b8293d31eccc4e67ab52d
+Upstream path: kimodo/assets/skeletons/somaskel77/standard_t_pose_global_offsets_rots.p
+Packaged path: soma_retargeter/configs/soma/standard_t_pose_global_offsets_rots.p
+SHA-256: 464a8a95159d5e26ad24a702107aec86698935deeb034e02c9fe51e55472d75b
+Modification status: unmodified, byte-for-byte copy
+License: Apache License 2.0
+Full license text: kimodo-LICENSE.txt
