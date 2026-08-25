@@ -17,6 +17,8 @@ imgui.ini
 
 # Local development/debug notes
 assets/docs/AI_SAPIENS_K1_RETARGETING_DEBUG_LOG_*.md
+/.codex_local/
+/docs/
 
 # Generated retargeting outputs
 assets/motions/test-export/
