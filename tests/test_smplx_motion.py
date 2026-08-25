@@ -19,6 +19,10 @@ from soma_retargeter.assets.kimodo_npz import detect_npz_fps
 from soma_retargeter.assets.smplx_motion import (
     C_AMASS_TO_KIMODO,
     SOMA_X_REQUIRED_VERSION,
+    HumanModelMotionMismatchError,
+    HumanModelInfo,
+    _runtime_shape_coefficient_count,
+    _smplh_runtime_data,
     build_conversion_signature,
     canonical_heading_yaw_degrees,
     compute_anatomical_heading,
@@ -171,6 +175,52 @@ class HumanModelInspectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "model type mismatch"):
                 inspect_human_model(model_path, "smplx")
 
+    def test_supplies_missing_smplh_hand_runtime_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model_smplh.npz"
+            np.savez(
+                model_path,
+                v_template=np.zeros((6890, 3), dtype=np.float32),
+                shapedirs=np.zeros((6890, 3, 16), dtype=np.float32),
+                kintree_table=np.zeros((2, 52), dtype=np.int64),
+            )
+
+            data = _smplh_runtime_data(model_path)
+
+        np.testing.assert_array_equal(
+            data["hands_componentsl"], np.eye(45, dtype=np.float32)
+        )
+        np.testing.assert_array_equal(
+            data["hands_componentsr"], np.eye(45, dtype=np.float32)
+        )
+        np.testing.assert_array_equal(
+            data["hands_meanl"], np.zeros(45, dtype=np.float32)
+        )
+        np.testing.assert_array_equal(
+            data["hands_meanr"], np.zeros(45, dtype=np.float32)
+        )
+
+    def test_matches_smplx_runtime_beta_dimension_for_compact_models(self) -> None:
+        compact = HumanModelInfo(
+            path=Path("/model.npz"),
+            model_type="smplh",
+            display_name="SMPL-H",
+            vertex_count=6890,
+            joint_count=52,
+            shape_coefficient_count=16,
+        )
+        full = HumanModelInfo(
+            path=Path("/model.npz"),
+            model_type="smplx",
+            display_name="SMPL-X",
+            vertex_count=10475,
+            joint_count=55,
+            shape_coefficient_count=300,
+        )
+
+        self.assertEqual(_runtime_shape_coefficient_count(compact), 10)
+        self.assertEqual(_runtime_shape_coefficient_count(full), 300)
+
     def test_generic_model_setting_precedes_legacy_smplx_setting(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -220,8 +270,22 @@ class SMPLXMotionLoaderTests(unittest.TestCase):
             poses=np.zeros((2, 165), dtype=np.float32),
             trans=np.zeros((2, 3), dtype=np.float32),
         ) as path:
-            with self.assertRaisesRegex(ValueError, "SMPL poses must"):
+            with self.assertRaisesRegex(
+                HumanModelMotionMismatchError,
+                "SMPL model does not match motion",
+            ):
                 load_smpl_motion(path, model_type="smpl")
+
+    def test_rejects_smplx_pose_for_selected_smplh_model(self) -> None:
+        with in_memory_npz(
+            poses=np.zeros((461, 165), dtype=np.float32),
+            trans=np.zeros((461, 3), dtype=np.float32),
+        ) as path:
+            with self.assertRaisesRegex(
+                HumanModelMotionMismatchError,
+                "SMPL-H model does not match motion",
+            ):
+                load_smpl_motion(path, model_type="smplh")
 
     def test_loads_full_stageii_pose_and_fps(self) -> None:
         with in_memory_npz(

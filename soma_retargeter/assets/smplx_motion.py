@@ -134,6 +134,10 @@ class SomaXDependencyError(RuntimeError):
     """Raised when a requested SOMA-X conversion cannot start."""
 
 
+class HumanModelMotionMismatchError(ValueError):
+    """Raised when motion parameters do not match the selected model family."""
+
+
 def probe_soma_x_dependencies() -> SomaXDependencyStatus:
     """Check the optional runtime without importing Torch or SOMA-X."""
 
@@ -249,6 +253,34 @@ def _model_data_mapping(path: Path) -> dict[str, Any]:
             return vars(data)
         raise ValueError(f"Unsupported model pickle payload: {type(data).__name__}")
     raise ValueError(f"Human model must be .npz or .pkl: {path}")
+
+
+def _smplh_runtime_data(path: Path) -> dict[str, Any]:
+    """Supply hand metadata that ``smplx.SMPLH`` reads even without PCA."""
+
+    data = dict(_model_data_mapping(path))
+    template = data.get("v_template")
+    if hasattr(template, "r"):
+        template = template.r
+    dtype = np.asarray(template).dtype
+    if not np.issubdtype(dtype, np.floating):
+        dtype = np.dtype(np.float32)
+
+    # The official compact SMPL-H NPZ omits MANO PCA metadata. The runtime
+    # still dereferences these fields when use_pca=False, although the basis is
+    # not used in that mode.
+    data.setdefault("hands_componentsl", np.eye(45, dtype=dtype))
+    data.setdefault("hands_componentsr", np.eye(45, dtype=dtype))
+    data.setdefault("hands_meanl", np.zeros(45, dtype=dtype))
+    data.setdefault("hands_meanr", np.zeros(45, dtype=dtype))
+    return data
+
+
+def _runtime_shape_coefficient_count(model_info: HumanModelInfo) -> int:
+    """Match the beta dimension selected by the installed ``smplx`` runtime."""
+
+    count = int(model_info.shape_coefficient_count)
+    return min(count, 10) if count < 300 else count
 
 
 def _array_shape(value: Any) -> tuple[int, ...]:
@@ -523,6 +555,10 @@ def _split_combined_poses(
     empty = _empty_pose_fields(frame_count)
     if model_type == "smpl":
         if width != 72:
+            if width in {66, 156, 165}:
+                raise HumanModelMotionMismatchError(
+                    f"SMPL model does not match motion poses shape {poses.shape}"
+                )
             raise ValueError(
                 f"SMPL poses must have shape (T, 72), got {poses.shape}"
             )
@@ -546,6 +582,10 @@ def _split_combined_poses(
                 "body_pose": poses[:, 3:66],
                 **empty,
             }
+        if width in {72, 165}:
+            raise HumanModelMotionMismatchError(
+                f"SMPL-H model does not match motion poses shape {poses.shape}"
+            )
         raise ValueError(
             f"SMPL-H poses must have shape (T, 156) or (T, 66), got {poses.shape}"
         )
@@ -574,6 +614,10 @@ def _split_combined_poses(
             "body_pose": poses[:, 3:66],
             **empty,
         }
+    if width == 72:
+        raise HumanModelMotionMismatchError(
+            f"SMPL-X model does not match motion poses shape {poses.shape}"
+        )
     raise ValueError(
         f"Unsupported poses shape {poses.shape}; expected (T, 165), "
         "(T, 156), or (T, 66)"
@@ -700,7 +744,7 @@ def load_smpl_motion(
         transl_value = None
         if "local_rot_mats" in data.files:
             if model_type != "smplx":
-                raise ValueError(
+                raise HumanModelMotionMismatchError(
                     "Kimodo 22-joint matrix input is only compatible with SMPL-X"
                 )
             local_rot_mats = _load_local_rotation_matrices(data)
@@ -784,11 +828,11 @@ def load_smpl_motion(
                     )
                 )
                 if model_type == "smpl" and has_hand_fields:
-                    raise ValueError(
+                    raise HumanModelMotionMismatchError(
                         "SMPL motion cannot contain SMPL-H/SMPL-X hand pose fields"
                     )
                 if model_type != "smplx" and has_face_fields:
-                    raise ValueError(
+                    raise HumanModelMotionMismatchError(
                         f"{SMPL_MODEL_LABELS[model_type]} motion cannot contain "
                         "SMPL-X face pose fields"
                     )
@@ -878,7 +922,7 @@ def load_smpl_motion(
             raise ValueError(f"FPS must be finite and positive, got {fps}")
         expression_value = _first_array(data, "expression", "expr")
         if model_type != "smplx" and expression_value is not None:
-            raise ValueError(
+            raise HumanModelMotionMismatchError(
                 f"{SMPL_MODEL_LABELS[model_type]} motion cannot contain expression fields"
             )
         expression = _normalize_expression_field(
@@ -1175,6 +1219,9 @@ def _create_source_model(
         "flat_hand_mean": flat_hand_mean,
     }
     if model_info.model_type == "smplh":
+        common["data_struct"] = smplx_module.utils.Struct(
+            **_smplh_runtime_data(model_info.path)
+        )
         return smplx_module.SMPLH(**common, **hand_options)
     return smplx_module.SMPLX(
         **common,
@@ -1276,7 +1323,7 @@ def convert_smpl_to_retarget_arrays(
     device = torch.device(device_name)
     num_betas = min(
         int(motion.betas.shape[1]),
-        int(model_info.shape_coefficient_count),
+        _runtime_shape_coefficient_count(model_info),
     )
     if num_betas <= 0:
         raise ValueError(f"Human model has no usable shape coefficients: {model}")

@@ -11,37 +11,23 @@ import json
 import os
 import sys
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable
 
-import numpy as np
-
 from soma_retargeter.assets import kimodo_npz
+from soma_retargeter.assets import motion_input
 from soma_retargeter.assets.smplx_motion import (
     build_conversion_signature,
-    convert_smpl_to_retarget_arrays,
     inspect_human_model,
     load_smpl_motion,
     normalize_model_type,
     require_soma_x_dependencies,
     resolve_human_model_path,
-    save_retarget_npz,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPO_ROOT / "assets/default_ai_sapiens_bvh_to_csv_converter_config.json"
-REQUIRED_OUTPUT_FIELDS = (
-    "local_rot_mats",
-    "global_rot_mats",
-    "posed_joints",
-    "root_positions",
-    "fps",
-    "conversion_signature",
-)
-
-
 def parse_args(
     argv: list[str] | None = None,
     *,
@@ -419,21 +405,12 @@ def validate_existing_output(
     input_path: Path,
     output_path: Path,
 ) -> tuple[bool, str]:
-    try:
-        expected = expected_signature(args, input_path)
-        with np.load(output_path, allow_pickle=False) as data:
-            missing = [field for field in REQUIRED_OUTPUT_FIELDS if field not in data.files]
-            if missing:
-                return False, "missing fields: " + ", ".join(missing)
-            actual = str(np.asarray(data["conversion_signature"]).reshape(-1)[0])
-            local = np.asarray(data["local_rot_mats"])
-            if local.ndim != 4 or local.shape[1:] != (77, 3, 3):
-                return False, f"invalid local_rot_mats shape: {local.shape}"
-        if actual != expected:
-            return False, "conversion signature differs"
-        return True, "matching conversion signature"
-    except Exception as exc:
-        return False, f"could not validate output: {exc}"
+    return motion_input.validate_existing_soma_output(
+        input_path,
+        output_path,
+        args.model,
+        conversion_options(args),
+    )
 
 
 def bvh_path_for_job(
@@ -476,24 +453,17 @@ def convert_one(
     file_count: int | None = None,
 ) -> dict[str, object]:
     prefix = f"[{file_index}/{file_count}] " if file_index and file_count else ""
-    arrays, metrics = convert_smpl_to_retarget_arrays(
+    result = motion_input.convert_raw_smpl_to_soma_npz(
         input_path,
+        output_path,
         args.model,
-        **conversion_options(args),
+        conversion_options(args),
         runtime_cache=runtime_cache,
         progress=lambda current, total: print(
             f"{prefix}Processed {current}/{total} frames", flush=True
         ),
+        compressed=not args.no_compress,
     )
-    signature = expected_signature(args, input_path)
-    arrays["conversion_signature"] = np.asarray(signature)
-    save_retarget_npz(output_path, arrays, compressed=not args.no_compress)
-    result: dict[str, object] = {
-        "input": str(input_path),
-        "output": str(output_path),
-        "conversion_signature": signature,
-        **asdict(metrics),
-    }
     bvh_path = bvh_path_for_job(args, input_path, output_path)
     if bvh_path is not None:
         result["bvh"] = emit_bvh(args, output_path, bvh_path)

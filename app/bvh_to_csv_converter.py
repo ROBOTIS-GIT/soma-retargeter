@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import os
 import newton
 
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import threading
@@ -20,6 +22,7 @@ import soma_retargeter.assets.bvh as bvh_utils
 import soma_retargeter.assets.csv as csv_utils
 import soma_retargeter.assets.ai_sapiens as ai_sapiens_assets
 import soma_retargeter.assets.kimodo_npz as kimodo_npz_utils
+import soma_retargeter.assets.motion_input as motion_input_utils
 import soma_retargeter.assets.smplx_motion as smplx_motion_utils
 import soma_retargeter.utils.io_utils as io_utils
 import soma_retargeter.pipelines.utils as pipeline_utils
@@ -35,6 +38,14 @@ from tqdm import trange
 _UI_NEWTON_PANEL_WIDTH  = 320
 _UI_NEWTON_PANEL_MARGIN = 10
 _UI_NEWTON_PANEL_ALPHA  = 0.9
+_UI_SOMA_X_MODEL_INFO_FONT_SIZE = 12.0
+_UI_SOMA_X_MODEL_INFO_COLOR = (1.0, 1.0, 1.0, 1.0)
+_UI_SOMA_X_ERROR_INFO_COLOR = (1.0, 0.2, 0.2, 1.0)
+_SOMA_X_SUPPORTED_MODEL_INFO = "Supported models: SMPL / SMPL-H / SMPL-X"
+_SOMA_X_MODEL_MOTION_MISMATCH_INFO = "Human model and motion do not match."
+_SOMA_X_FRAME_PROGRESS_PATTERN = re.compile(
+    r"Processed\s+(?P<current>\d+)/(?P<total>\d+)\s+frames"
+)
 _DEFAULT_COLOR = (235.0 / 255.0, 245.0 / 255.0, 112.0 / 255.0)
 _AI_SAPIENS_VIEWER_DEFAULT_ORIENTATION_YAW_DEG = -90.0
 
@@ -294,11 +305,16 @@ class Viewer:
         self.loaded_motion_kind = None
         self.soma_x_model_path = None
         self.soma_x_model_info = None
+        self.soma_x_dependency_status = (
+            smplx_motion_utils.probe_soma_x_dependencies()
+        )
         self.soma_x_motion_path = None
         self.soma_x_process = None
         self.soma_x_reader_thread = None
         self.soma_x_output_path = None
         self.soma_x_retarget_ready = False
+        self.soma_x_conversion_percent = None
+        self.soma_x_error_message = None
         self.soma_x_log_lines = deque(maxlen=30)
 
         self.animation_offsets = []
@@ -460,6 +476,8 @@ class Viewer:
         self.soma_x_motion_path = None
         self.soma_x_output_path = None
         self.soma_x_retarget_ready = False
+        self.soma_x_conversion_percent = None
+        self.soma_x_error_message = None
         if getattr(self, "loaded_motion_kind", None) != "soma_x":
             return
         for renderer_name in (
@@ -535,17 +553,127 @@ class Viewer:
             self.start_soma_x_conversion(selected)
 
     def _soma_x_controls_enabled(self):
+        dependency_status = getattr(
+            self,
+            "soma_x_dependency_status",
+            None,
+        )
+        soma_x_available = bool(
+            dependency_status is not None and dependency_status.available
+        )
         converting = self.soma_x_process is not None
         return {
-            "human_model": not converting,
-            "motion": not converting and self.soma_x_model_info is not None,
-            "retarget": not converting and self.soma_x_retarget_ready,
+            "human_model": soma_x_available and not converting,
+            "motion": (
+                soma_x_available
+                and not converting
+                and self.soma_x_model_info is not None
+            ),
+            "retarget": (
+                soma_x_available
+                and not converting
+                and self.soma_x_retarget_ready
+            ),
         }
+
+    def _soma_x_dependency_message(self):
+        status = getattr(self, "soma_x_dependency_status", None)
+        if status is None or status.available:
+            return ""
+        return (
+            f"SOMA-X is unavailable: {status.reason}\n"
+            f"Install with: {smplx_motion_utils.soma_x_install_command()}"
+        )
 
     def _soma_x_model_label(self):
         if self.soma_x_model_info is None:
             return ""
         return self.soma_x_model_info.display_name
+
+    def _soma_x_model_summary(self):
+        if self.soma_x_model_info is None:
+            return ""
+        info = self.soma_x_model_info
+        return f"{info.display_name} | {info.path.name}"
+
+    def _soma_x_model_tooltip(self):
+        if self.soma_x_model_info is None:
+            return ""
+        info = self.soma_x_model_info
+        return (
+            f"{info.path}\n"
+            f"Vertices: {info.vertex_count:,}\n"
+            f"Joints: {info.joint_count}\n"
+            f"Shape coefficients: {info.shape_coefficient_count}"
+        )
+
+    def _soma_x_progress_label(self):
+        percent = getattr(self, "soma_x_conversion_percent", None)
+        if percent is None:
+            return ""
+        return f"{max(0, min(100, int(percent)))}%"
+
+    def _update_soma_x_progress_from_line(self, line):
+        match = _SOMA_X_FRAME_PROGRESS_PATTERN.search(line)
+        if match is None:
+            return
+        current = int(match.group("current"))
+        total = int(match.group("total"))
+        if total <= 0:
+            return
+        self.soma_x_conversion_percent = min(100, (current * 100) // total)
+
+    def _draw_soma_x_model_info(self, ui):
+        dependency_message = self._soma_x_dependency_message()
+        error_message = getattr(self, "soma_x_error_message", None)
+        summary = self._soma_x_model_summary()
+        progress = self._soma_x_progress_label()
+        text = (
+            dependency_message
+            or error_message
+            or summary
+            or _SOMA_X_SUPPORTED_MODEL_INFO
+        )
+        color = (
+            _UI_SOMA_X_ERROR_INFO_COLOR
+            if dependency_message or error_message
+            else _UI_SOMA_X_MODEL_INFO_COLOR
+        )
+        if progress and not dependency_message and not error_message:
+            text = f"{summary} | {progress}" if summary else progress
+        ui.push_font(
+            None,
+            _UI_SOMA_X_MODEL_INFO_FONT_SIZE,
+        )
+        try:
+            ui.text_colored(ui.ImVec4(*color), text)
+        finally:
+            ui.pop_font()
+        if (
+            summary
+            and not dependency_message
+            and not error_message
+            and ui.is_item_hovered()
+        ):
+            ui.set_tooltip(self._soma_x_model_tooltip())
+
+    def _preflight_soma_x_motion_model(self, source):
+        try:
+            smplx_motion_utils.load_smpl_motion(
+                source,
+                model_type=self.soma_x_model_info.model_type,
+            )
+        except smplx_motion_utils.HumanModelMotionMismatchError:
+            self.soma_x_error_message = _SOMA_X_MODEL_MOTION_MISMATCH_INFO
+            return False
+        except Exception:
+            # The converter keeps responsibility for all non-compatibility errors.
+            pass
+        return True
+
+    @staticmethod
+    def _is_soma_x_model_motion_mismatch(details):
+        return "HumanModelMotionMismatchError" in details
 
     def start_soma_x_conversion(self, path):
         if self.soma_x_process is not None:
@@ -559,10 +687,13 @@ class Viewer:
         self.soma_x_motion_path = pathlib.Path(path).expanduser().resolve()
         self.soma_x_output_path = None
         self.soma_x_retarget_ready = False
+        self.soma_x_conversion_percent = None
+        self.soma_x_error_message = None
         status = smplx_motion_utils.probe_soma_x_dependencies()
+        self.soma_x_dependency_status = status
         if not status.available:
             self._show_gui_error(
-                "SOMA-X is not installed",
+                "SOMA-X is unavailable",
                 f"{status.reason}\n\nInstall with:\n"
                 f"{smplx_motion_utils.soma_x_install_command()}",
             )
@@ -572,6 +703,8 @@ class Viewer:
             source = pathlib.Path(path).expanduser().resolve()
             if not source.is_file():
                 raise FileNotFoundError(source)
+            if not self._preflight_soma_x_motion_model(source):
+                return
             model = self.soma_x_model_path
             options = self._soma_x_conversion_options()
             options["model_type"] = self.soma_x_model_info.model_type
@@ -619,6 +752,8 @@ class Viewer:
             self.soma_x_motion_path = source
             self.soma_x_output_path = output
             self.soma_x_retarget_ready = False
+            self.soma_x_conversion_percent = 0
+            self.soma_x_error_message = None
             self.soma_x_log_lines.clear()
             self.soma_x_process = subprocess.Popen(
                 command,
@@ -637,6 +772,7 @@ class Viewer:
         except Exception as exc:
             self.soma_x_process = None
             self.soma_x_retarget_ready = False
+            self.soma_x_conversion_percent = None
             self._show_gui_error("SOMA-X conversion error", str(exc))
 
     def _read_soma_x_process_output(self):
@@ -649,6 +785,7 @@ class Viewer:
                 continue
             print(line, flush=True)
             self.soma_x_log_lines.append(line)
+            self._update_soma_x_progress_from_line(line)
 
     def _poll_soma_x_process(self):
         process = self.soma_x_process
@@ -667,12 +804,19 @@ class Viewer:
                     motion_kind="soma_x",
                 )
                 self.soma_x_retarget_ready = True
+                self.soma_x_conversion_percent = 100
+                self.soma_x_error_message = None
             except Exception as exc:
                 self.soma_x_retarget_ready = False
+                self.soma_x_conversion_percent = None
                 self._show_gui_error("SOMA-X load error", str(exc))
             return
         self.soma_x_retarget_ready = False
+        self.soma_x_conversion_percent = None
         details = "\n".join(self.soma_x_log_lines)
+        if self._is_soma_x_model_motion_mismatch(details):
+            self.soma_x_error_message = _SOMA_X_MODEL_MOTION_MISMATCH_INFO
+            return
         self._show_gui_error(
             "SOMA-X conversion failed",
             details or f"Converter exited with status {return_code}",
@@ -689,6 +833,7 @@ class Viewer:
             process.kill()
             process.wait(timeout=5.0)
         self.soma_x_process = None
+        self.soma_x_conversion_percent = None
 
     def compute_playback_total_time(self):
         bvh_max_time = 0.0
@@ -975,10 +1120,7 @@ class Viewer:
                 ui.end_disabled()
             ui.pop_id()
 
-            soma_x_model_label = self._soma_x_model_label()
-            if soma_x_model_label:
-                ui.same_line()
-                ui.text(soma_x_model_label)
+            self._draw_soma_x_model_info(ui)
 
             ui.align_text_to_frame_padding()
             ui.text("CSV Motion:")
@@ -1087,34 +1229,28 @@ class Viewer:
         _, self.playback_loop = ui.checkbox("Loop", self.playback_loop)
         ui.end()
 
-    def batched_retargeting(self):
-        if not os.path.isdir(self.config['import_folder']):
-            print(f"[ERROR]: Import folder does not exist {self.config['import_folder']}.")
-            exit(-1)
+    def _retarget_bvh_jobs(self, bvh_jobs):
+        if not bvh_jobs:
+            raise ValueError("No BVH motions were prepared for retargeting")
+        batch_size = int(self.config['batch_size'])
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
 
-        import_path = pathlib.Path(self.config['import_folder'])
-        if len(self.config['export_folder']) == 0:
-            print("[ERROR]: No export folder specified.")
-            exit(-1)
+        # Keep the existing largest-first batching policy while carrying each
+        # source's explicit CSV destination through preprocessing.
+        bvh_jobs = sorted(
+            bvh_jobs,
+            key=lambda item: item[0].stat().st_size,
+            reverse=True,
+        )
+        batches = [
+            bvh_jobs[i:i + batch_size]
+            for i in range(0, len(bvh_jobs), batch_size)
+        ]
 
-        export_path = pathlib.Path(self.config['export_folder'])
-        if not export_path.is_dir():
-            print(f"[WARNING]: Export folder does not exist! Creating new folder at {str(export_path)}!")
-            export_path.mkdir(parents=True, exist_ok=True)
-
-        batch_size = self.config['batch_size']
-        bvh_files = list(import_path.rglob("*.bvh"))
-        if (len(bvh_files) == 0):
-            print(f"[ERROR]: Import folder {str(import_path)}, does not contain any BVH files.")
-            exit(-1)
-
-        # Sort files based on size (largest first)
-        bvh_files.sort(key=lambda p: p.stat().st_size, reverse=True)
-        batches = [bvh_files[i:i + batch_size] for i in range(0, len(bvh_files), batch_size)]
-        
-        # All skeletons should be the same, load one as our reference
+        # All skeletons should be the same, load one as our reference.
         bvh_importer = bvh_utils.BVHImporter()
-        bvh_skeleton, _ = bvh_importer.create_skeleton(batches[0][0])
+        bvh_skeleton, _ = bvh_importer.create_skeleton(batches[0][0][0])
 
         bvh_tx_converter = self.converter.transform(wp.transform_identity())
         expected_num_joints = bvh_skeleton.num_joints
@@ -1139,12 +1275,11 @@ class Viewer:
         nb_retargeted_motions = 0
         start_time = time.time()
 
-        for i, batch in enumerate(batches):
-            print(f"[INFO]: Processing batch {i+1} of {len(batches)}")
-            
+        for batch_index, batch in enumerate(batches):
+            print(f"[INFO]: Processing batch {batch_index+1} of {len(batches)}")
             print(f"[INFO]: Loading {len(batch)} animations...")
             animations = []
-            for file_path in batch:
+            for file_path, _ in batch:
                 _, animation = bvh_utils.load_bvh(file_path, bvh_skeleton)
                 # All animations should be on the same skeleton
                 assert expected_num_joints == animation.skeleton.num_joints, (
@@ -1188,11 +1323,11 @@ class Viewer:
                 assert(len(csv_buffers) == len(animations))
                 target_csv_config = csv_utils.get_csv_config_for_target(retarget_target)
                 mjcf_config_value = _ai_sapiens_mjcf_config_value(self.config, retargeter_config)
-                for i in trange(len(csv_buffers), desc="[INFO]: Exporting CSV Files"):
-                    csv_buffer = csv_buffers[i]
+                for output_index in trange(len(csv_buffers), desc="[INFO]: Exporting CSV Files"):
+                    csv_buffer = csv_buffers[output_index]
                     if _is_ai_sapiens_target(retarget_target):
                         _apply_ai_sapiens_output_convention(self.config, csv_buffer, mjcf_config_value)
-                    dst_path = export_path / pathlib.Path(batch[i]).relative_to(import_path).with_suffix(".csv")
+                    dst_path = batch[output_index][1]
                     dst_path.parent.mkdir(parents=True, exist_ok=True)
                     csv_utils.save_csv(dst_path, csv_buffer, target_csv_config)
 
@@ -1205,6 +1340,196 @@ class Viewer:
             f"in {elapsed_str} "
             f"[{(elapsed_time/nb_retargeted_motions):.2f}s per motion]!")
 
+    def batched_retargeting(self):
+        if not os.path.isdir(self.config['import_folder']):
+            print(f"[ERROR]: Import folder does not exist {self.config['import_folder']}.")
+            exit(-1)
+
+        import_path = pathlib.Path(self.config['import_folder'])
+        if len(self.config['export_folder']) == 0:
+            print("[ERROR]: No export folder specified.")
+            exit(-1)
+
+        export_path = pathlib.Path(self.config['export_folder'])
+        if not export_path.is_dir():
+            print(f"[WARNING]: Export folder does not exist! Creating new folder at {str(export_path)}!")
+            export_path.mkdir(parents=True, exist_ok=True)
+
+        bvh_files = list(import_path.rglob("*.bvh"))
+        if not bvh_files:
+            print(f"[ERROR]: Import folder {str(import_path)}, does not contain any BVH files.")
+            exit(-1)
+        self._retarget_bvh_jobs(
+            [
+                (
+                    path,
+                    export_path / path.relative_to(import_path).with_suffix(".csv"),
+                )
+                for path in bvh_files
+            ]
+        )
+
+    def _headless_soma_x_options(self, args, model_type):
+        options = self._soma_x_conversion_options()
+        options.update(
+            {
+                "model_type": model_type,
+                "fps_override": args.input_fps,
+                "heading_yaw_degrees": args.heading_yaw_degrees,
+            }
+        )
+        if args.device is not None:
+            options["device_name"] = str(args.device)
+        if args.soma_x_batch_size is not None:
+            options["batch_size"] = args.soma_x_batch_size
+        if args.source_coordinate is not None:
+            options["source_coordinate"] = args.source_coordinate
+        if args.canonicalize_heading is not None:
+            options["canonicalize_heading"] = args.canonicalize_heading
+        if args.rebase_root_horizontal is not None:
+            options["rebase_root_horizontal"] = args.rebase_root_horizontal
+        return options
+
+    def headless_retargeting(self, args):
+        model_path = smplx_motion_utils.resolve_human_model_path(
+            args.human_model,
+            self.config,
+            model_type="auto",
+        )
+        jobs = motion_input_utils.plan_motion_jobs(
+            args.input,
+            args.output_dir,
+            human_model=model_path,
+        )
+        raw_jobs = [
+            job
+            for job in jobs
+            if job.kind == motion_input_utils.MotionInputKind.RAW_SMPL_NPZ
+        ]
+
+        model_info = None
+        conversion_options = None
+        if raw_jobs:
+            if model_path is None:
+                raise FileNotFoundError(
+                    "Raw SMPL-family input requires --human-model, "
+                    "SOMA_RETARGETER_SOMA_X_HUMAN_MODEL, or "
+                    "soma_x_human_model in the config."
+                )
+            model_info = smplx_motion_utils.inspect_human_model(model_path)
+            smplx_motion_utils.require_soma_x_dependencies()
+            conversion_options = self._headless_soma_x_options(
+                args,
+                model_info.model_type,
+            )
+            for job in raw_jobs:
+                try:
+                    smplx_motion_utils.load_smpl_motion(
+                        job.source_path,
+                        model_type=model_info.model_type,
+                        fps_override=args.input_fps,
+                    )
+                except smplx_motion_utils.HumanModelMotionMismatchError as exc:
+                    raise smplx_motion_utils.HumanModelMotionMismatchError(
+                        f"Human model and motion do not match: {job.source_path}"
+                    ) from exc
+
+        template_bvh = (
+            args.bvh_template
+            or os.environ.get("SOMA_RETARGETER_KIMODO_NPZ_TEMPLATE_BVH")
+            or self.config.get("kimodo_npz_template_bvh")
+        )
+        offsets = (
+            args.bvh_offsets
+            or os.environ.get("SOMA_RETARGETER_KIMODO_NPZ_OFFSETS")
+            or self.config.get("kimodo_npz_offsets")
+        )
+        configured_fps = args.input_fps
+        if configured_fps is None and os.environ.get("SOMA_RETARGETER_KIMODO_NPZ_FPS") is not None:
+            configured_fps = float(os.environ["SOMA_RETARGETER_KIMODO_NPZ_FPS"])
+        if configured_fps is None:
+            configured_fps = self.config.get("kimodo_npz_fps")
+        position_scale = (
+            args.bvh_position_scale
+            if args.bvh_position_scale is not None
+            else _float_config_or_env(
+                self.config,
+                "kimodo_npz_position_scale",
+                "SOMA_RETARGETER_KIMODO_NPZ_POSITION_SCALE",
+                100.0,
+            )
+        )
+        compare = _bool_config_or_env(
+            self.config,
+            "kimodo_npz_compare",
+            "SOMA_RETARGETER_KIMODO_NPZ_COMPARE",
+            False,
+        )
+
+        runtime_cache = {}
+        prepared_jobs = []
+        for job_index, job in enumerate(jobs, start=1):
+            npz_path = job.source_path
+            if job.kind == motion_input_utils.MotionInputKind.RAW_SMPL_NPZ:
+                if job.soma_npz_path is None:
+                    raise RuntimeError(f"Raw SMPL job has no SOMA output path: {job}")
+                npz_path = job.soma_npz_path
+                if npz_path.exists() and not args.force:
+                    valid, reason = motion_input_utils.validate_existing_soma_output(
+                        job.source_path,
+                        npz_path,
+                        model_path,
+                        conversion_options,
+                    )
+                    if not valid:
+                        raise FileExistsError(
+                            f"Existing SOMA77 output is stale or invalid: "
+                            f"{npz_path} ({reason}). Pass --force to replace it."
+                        )
+                    print(
+                        f"[INFO]: [{job_index}/{len(jobs)}] Reusing SOMA77 NPZ "
+                        f"[{npz_path}] ({reason})"
+                    )
+                else:
+                    result = motion_input_utils.convert_raw_smpl_to_soma_npz(
+                        job.source_path,
+                        npz_path,
+                        model_path,
+                        conversion_options,
+                        runtime_cache=runtime_cache,
+                        progress=lambda current, total, index=job_index: print(
+                            f"[{index}/{len(jobs)}] Processed "
+                            f"{current}/{total} frames",
+                            flush=True,
+                        ),
+                    )
+                    print(json.dumps(result, indent=2), flush=True)
+
+            if job.kind != motion_input_utils.MotionInputKind.BVH:
+                bvh_result = motion_input_utils.convert_soma_npz_to_bvh(
+                    npz_path,
+                    job.bvh_path,
+                    template_bvh=template_bvh,
+                    offsets=offsets,
+                    configured_fps=configured_fps,
+                    position_scale=position_scale,
+                    compare=compare,
+                )
+                if bvh_result["fps_source"] == "fallback_30":
+                    print(
+                        f"[WARNING]: No FPS metadata or sidecar BVH for "
+                        f"{npz_path}; using 30 FPS. Use --input-fps to override."
+                    )
+                print(
+                    f"[INFO]: [{job_index}/{len(jobs)}] Prepared BVH "
+                    f"[{job.bvh_path}] frames={bvh_result['frames']} "
+                    f"fps={bvh_result['fps']:.6g} "
+                    f"source={bvh_result['fps_source']}"
+                )
+            prepared_jobs.append((job.bvh_path, job.csv_path))
+
+        self._retarget_bvh_jobs(prepared_jobs)
+
 def main():
     import newton.examples
 
@@ -1215,17 +1540,97 @@ def main():
         type=lambda x: None if x == "None" else str(x),
         default="./assets/default_bvh_to_csv_converter_config.json",
         help="Input json config file.")
+    parser.add_argument(
+        "--input",
+        type=pathlib.Path,
+        help="Headless BVH/NPZ motion file or recursively scanned directory.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=pathlib.Path,
+        help=(
+            "Headless output root containing soma_npz/, soma_bvh/, "
+            "and retargeted_csv/."
+        ),
+    )
+    parser.add_argument(
+        "--human-model",
+        type=pathlib.Path,
+        help="Licensed SMPL/SMPL-H/SMPL-X model used only for raw NPZ input.",
+    )
+    parser.add_argument(
+        "--input-fps",
+        type=float,
+        help="Override source FPS for raw conversion and NPZ-to-BVH output.",
+    )
+    parser.add_argument(
+        "--soma-x-batch-size",
+        type=int,
+        help="Override the SOMA-X frame batch size for raw NPZ conversion.",
+    )
+    parser.add_argument(
+        "--source-coordinate",
+        choices=("auto", "amass", "kimodo"),
+        help="Override the coordinate convention of raw SMPL-family input.",
+    )
+    parser.add_argument(
+        "--canonicalize-heading",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable frame-zero heading canonicalization.",
+    )
+    parser.add_argument(
+        "--heading-yaw-degrees",
+        type=float,
+        default=0.0,
+        help="Additional heading rotation applied during raw conversion.",
+    )
+    parser.add_argument(
+        "--rebase-root-horizontal",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable frame-zero horizontal root rebasing.",
+    )
+    parser.add_argument(
+        "--bvh-template",
+        type=pathlib.Path,
+        help="Template BVH used when converting SOMA77 NPZ input.",
+    )
+    parser.add_argument(
+        "--bvh-offsets",
+        type=pathlib.Path,
+        help="SOMA77 rest-pose offsets used for fixed-Euler BVH conversion.",
+    )
+    parser.add_argument(
+        "--bvh-position-scale",
+        type=float,
+        help="Root-position scale used for generated BVH files.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace stale or invalid generated preprocessing outputs.",
+    )
 
     viewer, args = newton.examples.init(parser)
     if not pathlib.Path(args.config).exists():
         print(f"[ERROR]: Main config json file not found: {args.config}")
         exit(1)
 
+    if (args.input is None) != (args.output_dir is None):
+        parser.error("--input and --output-dir must be specified together")
+    if args.input is not None and not isinstance(viewer, newton.viewer.ViewerNull):
+        parser.error("--input and --output-dir are supported only with --viewer null")
+    if args.soma_x_batch_size is not None and args.soma_x_batch_size <= 0:
+        parser.error("--soma-x-batch-size must be positive")
+
     config = io_utils.load_json(args.config)
     with wp.ScopedDevice(args.device):
         app = Viewer(viewer, config)
         if not isinstance(viewer, newton.viewer.ViewerNull):
             app.run()
+        elif args.input is not None:
+            app.headless_retargeting(args)
         else:
             app.batched_retargeting()
 
