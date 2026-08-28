@@ -164,3 +164,18 @@ This project draws inspiration and builds upon excellent open-source work, inclu
 This codebase is licensed under [Apache-2.0](LICENSE).
 
 This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.
+
+### Optional SOMA-X and SMPL licensing
+
+- [SOMA-X](https://github.com/NVlabs/SOMA-X) and its published runtime assets
+  are licensed under Apache-2.0.
+- The packaged SOMA77 rest-pose offsets file is an unmodified Kimodo asset.
+  Its source attribution and Apache-2.0 license are included under
+  [`licenses/`](licenses/).
+- Installing the `soma-x` extra also installs the third-party `smplx` Python
+  package. The `smplx` software and user-supplied SMPL-family model files are
+  governed by separate Max Planck license terms, including non-commercial-use
+  restrictions unless a suitable commercial license has been obtained.
+- SMPL, SMPL-H, and SMPL-X model files are not included in this repository or
+  in the Soma Retargeter wheel. Users must obtain and use those files under
+  the applicable model license.

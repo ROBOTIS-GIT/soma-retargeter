@@ -23,13 +23,22 @@ dependencies = [
     "tqdm==4.67.3",
 ]
 
+[project.optional-dependencies]
+soma-x = ["py-soma-x[smpl]==0.2.1"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["soma_retargeter*"]
 exclude = ["app*", "assets*", "submodules*"]
 
 [tool.setuptools.package-data]
-soma_retargeter = ["configs/**/*.json", "configs/**/*.bvh", "configs/**/*.usd", "configs/**/*.xml"]
+soma_retargeter = [
+    "configs/**/*.json",
+    "configs/**/*.bvh",
+    "configs/**/*.usd",
+    "configs/**/*.xml",
+    "configs/**/*.p",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "soma_retargeter.__version__" }
