@@ -235,12 +235,23 @@ def resolve_smplx_model_path(
     return resolve_human_model_path(explicit, config, model_type="smplx")
 
 
+def _ensure_chumpy_pickle_compat() -> None:
+    """Prepare legacy SMPL pickle support when SOMA-X is installed."""
+
+    try:
+        from soma._smpl_family_loader import ensure_chumpy_compat
+    except (ImportError, ModuleNotFoundError):
+        return
+    ensure_chumpy_compat()
+
+
 def _model_data_mapping(path: Path) -> dict[str, Any]:
     suffix = path.suffix.lower()
     if suffix == ".npz":
         with np.load(path, allow_pickle=True) as data:
             return {key: np.asarray(data[key]) for key in data.files}
     if suffix == ".pkl":
+        _ensure_chumpy_pickle_compat()
         with path.open("rb") as stream:
             try:
                 data = pickle.load(stream, encoding="latin1")
@@ -462,11 +473,34 @@ def temp_retarget_npz_path_for_smplx(
     return temp_retarget_npz_path_for_smpl(input_path, model_path, options)
 
 
+SMPLRuntimeKey = tuple[str, str, str, int, int, bool, str]
 SMPLRuntimeCache = dict[
-    tuple[str, str, str, int, bool, str],
+    SMPLRuntimeKey,
     tuple[Any, Any, Any],
 ]
 SMPLXRuntimeCache = SMPLRuntimeCache
+
+
+def _smpl_runtime_key(
+    model: str | Path,
+    model_type: str,
+    gender: str,
+    num_betas: int,
+    num_expression_coeffs: int,
+    flat_hand_mean: bool,
+    device: Any,
+) -> SMPLRuntimeKey:
+    """Identify source and target runtimes with shape-sensitive dimensions."""
+
+    return (
+        str(model),
+        model_type,
+        gender,
+        int(num_betas),
+        int(num_expression_coeffs),
+        flat_hand_mean,
+        str(device),
+    )
 
 
 def _first_array(data: np.lib.npyio.NpzFile, *keys: str) -> np.ndarray | None:
@@ -1230,6 +1264,31 @@ def _create_source_model(
     )
 
 
+def _source_expression_for_model(
+    motion: SMPLMotion,
+    source_model: Any,
+) -> np.ndarray:
+    """Match SMPL-X expression input to the instantiated model's capacity."""
+
+    expression = np.asarray(motion.expression, dtype=np.float32)
+    if motion.model_type != "smplx":
+        return expression
+
+    supported = int(
+        getattr(source_model, "num_expression_coeffs", expression.shape[1])
+    )
+    if supported <= 0:
+        raise ValueError(
+            f"SMPL-X runtime reported invalid expression width {supported}"
+        )
+    if expression.shape[1] < supported:
+        raise ValueError(
+            "SMPL-X motion has fewer expression coefficients than the runtime "
+            f"requires: motion={expression.shape[1]}, runtime={supported}"
+        )
+    return np.ascontiguousarray(expression[:, :supported], dtype=np.float32)
+
+
 def _source_forward_kwargs(
     motion: SMPLMotion,
     fields: dict[str, Any],
@@ -1330,13 +1389,15 @@ def convert_smpl_to_retarget_arrays(
     betas = torch.from_numpy(motion.betas[:, :num_betas]).float().to(device)
     num_betas = int(betas.shape[1])
     cache = {} if runtime_cache is None else runtime_cache
-    runtime_key = (
-        str(model),
+    num_expression_coeffs = int(motion.expression.shape[1])
+    runtime_key = _smpl_runtime_key(
+        model,
         model_info.model_type,
         motion.gender,
         num_betas,
+        num_expression_coeffs,
         flat_hand_mean,
-        str(device),
+        device,
     )
     runtime = cache.get(runtime_key)
     if runtime is None:
@@ -1345,7 +1406,7 @@ def convert_smpl_to_retarget_arrays(
             model_info,
             gender=motion.gender,
             num_betas=num_betas,
-            num_expression_coeffs=int(motion.expression.shape[1]),
+            num_expression_coeffs=num_expression_coeffs,
             flat_hand_mean=flat_hand_mean,
         ).to(device)
         source_model.eval()
@@ -1375,8 +1436,8 @@ def convert_smpl_to_retarget_arrays(
     # forward kinematics requires a separate prepared identity.
     target_layer.prepare_identity(betas)
 
-    fields = {
-        name: torch.from_numpy(getattr(motion, name)).float().to(device)
+    source_fields = {
+        name: getattr(motion, name)
         for name in (
             "global_orient",
             "body_pose",
@@ -1388,6 +1449,13 @@ def convert_smpl_to_retarget_arrays(
             "expression",
             "transl",
         )
+    }
+    source_fields["expression"] = _source_expression_for_model(
+        motion, source_model
+    )
+    fields = {
+        name: torch.from_numpy(value).float().to(device)
+        for name, value in source_fields.items()
     }
     if motion.transl_is_root_position:
         neutral_fields = {
@@ -1657,6 +1725,8 @@ def normalize_retarget_heading_arrays(
     """Canonicalize an existing SOMA77 NPZ without rerunning pose inversion."""
 
     output = {key: np.array(value, copy=True) for key, value in arrays.items()}
+    # The raw conversion signature no longer describes arrays transformed here.
+    output.pop("conversion_signature", None)
     required = ("local_rot_mats", "global_rot_mats", "posed_joints")
     missing = [key for key in required if key not in output]
     if missing:

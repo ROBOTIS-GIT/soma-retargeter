@@ -21,6 +21,9 @@ from soma_retargeter.assets.smplx_motion import (
     SOMA_X_REQUIRED_VERSION,
     HumanModelMotionMismatchError,
     HumanModelInfo,
+    _model_data_mapping,
+    _smpl_runtime_key,
+    _source_expression_for_model,
     _runtime_shape_coefficient_count,
     _smplh_runtime_data,
     build_conversion_signature,
@@ -174,6 +177,34 @@ class HumanModelInspectionTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "model type mismatch"):
                 inspect_human_model(model_path, "smplx")
+
+    def test_prepares_chumpy_compat_before_loading_pickle(self) -> None:
+        events = []
+
+        def prepare_compat() -> None:
+            events.append("compat")
+
+        def load_pickle(*_args, **_kwargs):
+            events.append("pickle")
+            return {"v_template": np.zeros((1, 3), dtype=np.float32)}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model.pkl"
+            model_path.write_bytes(b"placeholder")
+            with (
+                patch(
+                    "soma_retargeter.assets.smplx_motion._ensure_chumpy_pickle_compat",
+                    side_effect=prepare_compat,
+                ),
+                patch(
+                    "soma_retargeter.assets.smplx_motion.pickle.load",
+                    side_effect=load_pickle,
+                ),
+            ):
+                data = _model_data_mapping(model_path)
+
+        self.assertEqual(events, ["compat", "pickle"])
+        self.assertIn("v_template", data)
 
     def test_supplies_missing_smplh_hand_runtime_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -537,6 +568,7 @@ class CoordinateTransformTests(unittest.TestCase):
             "root_positions": joints[:, 0].copy(),
             "smooth_root_pos": joints[:, 0].copy(),
             "heading_correction_degrees": np.float32(180.0),
+            "conversion_signature": np.asarray("raw-conversion"),
         }
 
         normalized, applied_yaw = normalize_retarget_heading_arrays(arrays)
@@ -579,6 +611,8 @@ class CoordinateTransformTests(unittest.TestCase):
         self.assertAlmostEqual(
             float(normalized["heading_correction_degrees"]), 90.0
         )
+        self.assertNotIn("conversion_signature", normalized)
+        self.assertEqual(str(arrays["conversion_signature"]), "raw-conversion")
 
         normalized_again, second_yaw = normalize_retarget_heading_arrays(
             normalized
@@ -668,6 +702,26 @@ class SomaXOptionalDependencyTests(unittest.TestCase):
 
 
 class SomaXModelAndCacheTests(unittest.TestCase):
+    def test_runtime_cache_key_includes_expression_width(self) -> None:
+        common = (Path("/model.npz"), "smplx", "neutral", 10)
+
+        key_10 = _smpl_runtime_key(*common, 10, True, "cpu")
+        key_100 = _smpl_runtime_key(*common, 100, True, "cpu")
+
+        self.assertNotEqual(key_10, key_100)
+
+    def test_expression_is_limited_to_runtime_capacity(self) -> None:
+        motion = SimpleNamespace(
+            model_type="smplx",
+            expression=np.arange(200, dtype=np.float32).reshape(2, 100),
+        )
+        source_model = SimpleNamespace(num_expression_coeffs=10)
+
+        expression = _source_expression_for_model(motion, source_model)
+
+        self.assertEqual(expression.shape, (2, 10))
+        np.testing.assert_array_equal(expression, motion.expression[:, :10])
+
     def test_model_resolution_prefers_explicit_then_environment_then_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
